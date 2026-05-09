@@ -3,11 +3,13 @@ import sys
 import time
 import json
 import numpy as np
+import asyncio
 
 # Add backend to sys.path
 sys.path.append(os.path.join(os.getcwd(), "backend"))
 
-from app.services.image_service import ImageService, TextEmbeddingService
+from app.services.image_service import ImageService
+from app.services.text_service import TextEmbeddingService
 from app.services.retrieval_service import ChromaDBManager, BM25IndexManager, HybridRetrievalEngine
 from app.services.reranker_service import RerankerService
 from app.utils.confidence import compute_confidence, route_by_confidence, extract_scores_from_retrieval, FollowUpQuestionGenerator
@@ -42,7 +44,7 @@ def print_result(case_num, name, result, retrieval_time, rerank_time):
     print("+----------------------+----------------------+")
     return retrieval_time, rerank_time, action
 
-def main():
+async def main():
     print("Initializing PashuDoctor Retrieval Pipeline...")
     
     image_service = ImageService()
@@ -55,21 +57,24 @@ def main():
     
     stats = []
 
-    # Paths
+    # Paths (Placeholders if local paths don't exist)
     fmd_img = r"C:\Users\mahip\.cache\kagglehub\datasets\devang03mgr\cattle-diseases-datasets\versions\1\Cows datasets\foot-and-mouth\-24-_jpg.rf.a8145c875b1985f2632b853ab03d4ae3.jpg"
     mastitis_img = r"C:\Users\mahip\.cache\kagglehub\datasets\sivaprathishsiva\mastitis-disease-detection\versions\1\Data\23.jpeg"
     
-    # Ensure they exist or fallback to generic placeholder logic
-    if not os.path.exists(fmd_img):
-        print(f"Warning: FMD test image not found. Search for a valid one.")
-    if not os.path.exists(mastitis_img):
-        # Try to find another mastitis image
-        mastitis_img = fmd_img # Fallback for structural test
+    # Check if images exist, if not create dummy ones or handle error
+    if not os.path.exists(fmd_img) or not os.path.exists(mastitis_img):
+        print("Warning: Test images not found at absolute paths. Using dummy data for structural test.")
+        # Create a tiny dummy image if none exist
+        from PIL import Image
+        dummy_path = "dummy_test.jpg"
+        Image.new('RGB', (100, 100), color = (73, 109, 137)).save(dummy_path)
+        fmd_img = dummy_path
+        mastitis_img = dummy_path
     
     # Test Case 1 — Mastitis query
     print("\nRunning Test Case 1: Mastitis...")
     s1 = "cow with swollen udder, reduced milk, hot painful udder, milk has clots"
-    r1 = retrieval.retrieve_all(mastitis_img, s1, animal_type="cow")
+    r1 = await retrieval.retrieve_all(mastitis_img, s1, animal_type="cow")
     t1_ret = r1["retrieval_time_ms"]
     r1 = reranker.rerank_all(s1, r1)
     t1_rer = r1["reranking_time_ms"]
@@ -78,7 +83,7 @@ def main():
     # Test Case 2 — FMD query
     print("\nRunning Test Case 2: FMD...")
     s2 = "cattle with blisters on mouth, drooling, limping, not eating, high fever"
-    r2 = retrieval.retrieve_all(fmd_img, s2) # Auto-detect animal
+    r2 = await retrieval.retrieve_all(fmd_img, s2) # Auto-detect animal
     t2_ret = r2["retrieval_time_ms"]
     r2 = reranker.rerank_all(s2, r2)
     t2_rer = r2["reranking_time_ms"]
@@ -87,7 +92,7 @@ def main():
     # Test Case 3 — Low confidence query
     print("\nRunning Test Case 3: Low Confidence...")
     s3 = "animal seems sick"
-    r3 = retrieval.retrieve_all(fmd_img, s3)
+    r3 = await retrieval.retrieve_all(fmd_img, s3)
     t3_ret = r3["retrieval_time_ms"]
     r3 = reranker.rerank_all(s3, r3)
     t3_rer = r3["reranking_time_ms"]
@@ -128,4 +133,4 @@ def main():
     print("="*45)
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

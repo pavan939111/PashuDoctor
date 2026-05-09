@@ -13,7 +13,7 @@ from slowapi.errors import RateLimitExceeded
 from app.config import settings
 from app.database import create_db_tables
 from app.dependencies import initialise_services
-from app.routers import analyze, chat, history, alerts
+from app.routers import analyze, chat, history, alerts, auth, governance
 from app.limiter import limiter
 from app.logger import setup_logging, logger
 
@@ -96,7 +96,8 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 
 # 5. Include all routers
-# Note: prefixes are handled here as requested
+app.include_router(auth.router, prefix="/auth", tags=["Authentication"])
+app.include_router(governance.router, prefix="/governance", tags=["Governance"])
 app.include_router(analyze.router, prefix="/analyze", tags=["Analysis"])
 app.include_router(chat.router, prefix="/chat", tags=["Chat"])
 app.include_router(history.router, prefix="/history", tags=["History"])

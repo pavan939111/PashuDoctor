@@ -1,14 +1,16 @@
+import torch
+import clip
 import numpy as np
-from sentence_transformers import SentenceTransformer
 from tqdm import tqdm
 from functools import lru_cache
 from typing import List, Dict, Any
 
 class TextEmbeddingService:
     def __init__(self):
-        # 1. Load Model
-        self.model = SentenceTransformer("all-MiniLM-L6-v2")
-        self.dim = 384
+        # 1. Load CLIP for Text Embeddings (Standardizing on 512 dimensions)
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.model, _ = clip.load("ViT-B/32", device=self.device)
+        self.dim = 512
         
         self.DISEASE_SYMPTOM_MAP = {
             "foot_and_mouth": "blisters on mouth hooves teats fever drooling lameness reduced milk",
@@ -20,19 +22,26 @@ class TextEmbeddingService:
             "healthy": "healthy normal animal no visible disease signs good body condition"
         }
         
-        print("TextEmbeddingService loaded")
+        print(f"TextEmbeddingService standardized to 512 dimensions (CLIP) on {self.device}")
 
     @lru_cache(maxsize=512)
     def get_text_embedding(self, text: str) -> np.ndarray:
         if not text:
             return np.zeros(self.dim)
         
-        # Encode and normalize
-        embedding = self.model.encode(text)
-        norm = np.linalg.norm(embedding)
-        if norm > 0:
-            embedding = embedding / norm
-        return embedding
+        try:
+            # CLIP Tokenization and Encoding
+            text_tokens = clip.tokenize([text[:77]]).to(self.device) # CLIP has 77 token limit
+            
+            with torch.no_grad():
+                text_features = self.model.encode_text(text_tokens)
+                # Normalize
+                text_features /= text_features.norm(dim=-1, keepdim=True)
+            
+            return text_features.cpu().numpy().flatten()
+        except Exception as e:
+            print(f"Error getting text embedding: {e}")
+            return np.zeros(self.dim)
 
     def get_disease_text(self, disease: str, animal: str) -> str:
         symptoms = self.DISEASE_SYMPTOM_MAP.get(disease, "unknown symptoms")

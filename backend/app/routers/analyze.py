@@ -214,7 +214,7 @@ async def analyze_image(
         retrieval_start = time.time()
         # We need a new retrieval method or hack it by passing the combined embedding
         # For now, let's assume retrieval.retrieve_all can handle a list of paths
-        results = await anyio.to_thread.run_sync(retrieval.retrieve_all, temp_paths, symptom_text, detected_animal)
+        results = await retrieval.retrieve_all(temp_paths, symptom_text, detected_animal)
         retrieval_time = (time.time() - retrieval_start) * 1000
         
         # 6. Reranking
@@ -260,18 +260,19 @@ async def analyze_image(
         routing = route_by_confidence(confidence)
         
         # 8. Follow-up or Diagnosis
+        # 8. Follow-up and Diagnosis
+        follow_up = question_generator.get_questions(
+            action=routing["action"],
+            disease_hint=top_candidate["metadata"].get("disease"),
+            answered=[]
+        )
+
         diagnosis = None
-        follow_up = []
         model_used = "none"
         llm_time = 0
         
-        if routing["action"] == "ask_more":
-            follow_up = question_generator.get_questions(
-                action="ask_more",
-                disease_hint=top_candidate["metadata"].get("disease"),
-                answered=[]
-            )
-        elif routing["show_prediction"]:
+        # We attempt a diagnosis if we have minimal evidence (10%) or an image
+        if confidence["score"] > 0.10 or temp_paths:
             llm_start = time.time()
             breed_context = "" # No breed for image detection yet, unless passed in query
             prompt = build_diagnosis_prompt(
@@ -292,7 +293,7 @@ async def analyze_image(
                     temp_paths,
                     3
                 )
-                model_used = "gemini-1.5-flash" # validate_with_retry uses gemini
+                model_used = "gemini-1.5-flash"
                 
                 # Cache the validated data
                 cache_key = f"{detected_animal}_{symptom_text[:50]}"
@@ -305,7 +306,10 @@ async def analyze_image(
                     diag_data = json.loads(llm_res["text"])
                     model_used = llm_res.get("routed_to", "unknown")
                 else:
-                    return get_error_response("Offline mode: No cached diagnosis for these symptoms. Please connect to internet.", 503)
+                    # In low confidence ask_more path, we can afford to skip if offline
+                    diag_data = None
+                    if confidence["score"] > 0.35:
+                        return get_error_response("Offline mode: No cached diagnosis for these symptoms. Please connect to internet.")
 
             llm_time = (time.time() - llm_start) * 1000
             
@@ -350,7 +354,7 @@ async def analyze_image(
                         formatted_response=formatted
                     )
                 except Exception as e:
-                    print(f"Error parsing LLM response: {e}")
+                    logger.error(f"Error parsing LLM response: {e}", exc_info=True)
                     # Fallback to simple diagnosis
                     diagnosis = None
         
@@ -456,7 +460,7 @@ async def analyze_text(
         # 1. Text-only Retrieval
         retrieval_start = time.time()
         # Use retrieve_all but pass None for image
-        results = await anyio.to_thread.run_sync(retrieval.retrieve_all, None, request_body.symptom_text, request_body.animal_type)
+        results = await retrieval.retrieve_all(None, request_body.symptom_text, request_body.animal_type)
         retrieval_time = (time.time() - retrieval_start) * 1000
         
         # 2. Reranking
@@ -544,7 +548,7 @@ async def analyze_text(
                     diag_data = json.loads(llm_res["text"])
                     model_used = llm_res.get("routed_to", "unknown")
                 else:
-                    return get_error_response("Offline mode: No cached diagnosis for these symptoms. Please connect to internet.", 503)
+                    return get_error_response("Offline mode: No cached diagnosis for these symptoms. Please connect to internet.")
             llm_time = (time.time() - llm_start) * 1000
             
             if diag_data:
@@ -679,3 +683,35 @@ async def get_case_details(
     except Exception as e:
         print(f"Error fetching case: {e}")
         return get_error_response(str(e))
+
+import io
+from gtts import gTTS
+from fastapi.responses import StreamingResponse
+
+@router.post("/tts")
+async def text_to_speech(body: dict):
+    text = body.get("text","")[:300]
+    lang = body.get("lang","en")
+    
+    # Simple lang code mapping if needed (e.g. English -> en)
+    # Most of our internal lang names are capitalized, gTTS needs 2-char codes
+    lang_map = {
+        "english": "en", "hindi": "hi", "tamil": "ta", "telugu": "te",
+        "kannada": "kn", "malayalam": "ml", "marathi": "mr", "bengali": "bn",
+        "punjabi": "pa", "gujarati": "gu"
+    }
+    gtts_lang = lang_map.get(lang.lower(), "en")
+    
+    buf = io.BytesIO()
+    try:
+        tts = gTTS(text=text, lang=gtts_lang, slow=False)
+        tts.write_to_fp(buf)
+        buf.seek(0)
+        return StreamingResponse(
+            buf,
+            media_type="audio/mpeg",
+            headers={"Content-Disposition": "attachment; filename=tts.mp3"}
+        )
+    except Exception as e:
+        print(f"TTS Error: {e}")
+        raise HTTPException(status_code=500, detail="TTS generation failed")

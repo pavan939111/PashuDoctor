@@ -32,8 +32,8 @@ class Settings(BaseSettings):
     CONFIDENCE_THRESHOLD_HIGH: float = 0.90
     
     # RAG Weights and Parameters
-    DENSE_WEIGHT: float = 0.3
-    BM25_WEIGHT: float = 0.7
+    DENSE_WEIGHT: float = 0.7
+    BM25_WEIGHT: float = 0.3
     TOP_K_RETRIEVE: int = 20
     TOP_K_RERANK: int = 3
     MAX_CHAT_HISTORY: int = 10

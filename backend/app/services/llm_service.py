@@ -1,6 +1,7 @@
 import json
 import time
 import os
+import anyio
 import google.generativeai as genai
 from PIL import Image
 from typing import List, Dict, Any, Optional
@@ -56,8 +57,9 @@ class GeminiService:
             content = []
             if system_prompt:
                 content.append(system_prompt)
-            
+                
             if image_paths:
+                print(f"[DEBUG] Gemini receiving {len(image_paths)} images for analysis: {image_paths}")
                 for path in image_paths:
                     if os.path.exists(path):
                         img = Image.open(path)
@@ -152,6 +154,102 @@ class GeminiService:
                 "error": err_msg
             }
 
+    async def extract_metadata(self, text: str) -> Dict[str, Any]:
+        """
+        Extracts structured metadata from conversational queries.
+        """
+        prompt = f"""
+        Extract diagnostic metadata from the following farmer query:
+        "{text}"
+        
+        Return valid JSON only with:
+        - animal: (cow/buffalo/goat/sheep/unknown)
+        - body_part: (udder/hoof/skin/mouth/eyes/unknown)
+        - severity: (mild/moderate/severe/emergency)
+        - symptoms: [list of keywords]
+        - is_medical: true/false
+        """
+        
+        try:
+            response = self.model.generate_content(prompt)
+            # Simple JSON extraction
+            text_res = response.text.strip()
+            if "```json" in text_res:
+                text_res = text_res.split("```json")[1].split("```")[0].strip()
+            return json.loads(text_res)
+        except Exception:
+            return {
+                "animal": "unknown",
+                "body_part": "unknown",
+                "severity": "moderate",
+                "symptoms": [],
+                "is_medical": True
+            }
+
+    async def generate_stream(
+        self,
+        prompt: str = None,
+        system_prompt: str = None,
+        messages: List[Dict[str, str]] = None,
+        image_paths: List[str] = None
+    ):
+        """Generates a stream of tokens from Gemini."""
+        try:
+            if messages:
+                # Use Chat history mode
+                history = []
+                for msg in messages[:-1]:
+                    role = "user" if msg["role"] == "user" else "model"
+                    history.append({"role": role, "parts": [msg["content"]]})
+                
+                chat = self.model.start_chat(history=history)
+                last_msg = messages[-1]["content"]
+                
+                # If there's an image in the latest turn, we handle it
+                # For streaming chat, we usually only send text in subsequent turns
+                # but we'll support images if provided
+                content = []
+                if image_paths:
+                    for path in image_paths:
+                        if os.path.exists(path):
+                            img = Image.open(path)
+                            content.append(img)
+                content.append(last_msg)
+                
+                response = chat.send_message(
+                    content, 
+                    generation_config=self.generation_config,
+                    safety_settings=self.safety_settings,
+                    stream=True
+                )
+            else:
+                # Simple prompt mode
+                content = []
+                if system_prompt:
+                    content.append(system_prompt)
+                
+                if image_paths:
+                    for path in image_paths:
+                        if os.path.exists(path):
+                            img = Image.open(path)
+                            content.append(img)
+                if prompt:
+                    content.append(prompt)
+                
+                response = self.model.generate_content(
+                    content,
+                    generation_config=self.generation_config,
+                    safety_settings=self.safety_settings,
+                    stream=True
+                )
+
+            for chunk in response:
+                if chunk.text:
+                    yield chunk.text
+        except Exception as e:
+            print(f"Streaming error: {e}")
+            yield f"\n[Streaming Error: {e}]\n"
+
     def analyze_image_disease(
         self,
         image_paths: List[str],
@@ -222,19 +320,24 @@ class LLMRouter:
         response["routed_to"] = "gemini"
         return response
 
-    def generate_streaming(
+    async def generate_streaming(
         self,
-        prompt: str,
+        prompt: str = None,
+        system_prompt: str = None,
+        messages: List[Dict[str, str]] = None,
+        image_paths: List[str] = None,
         routing_context: Dict[str, Any] = {}
     ):
-        try:
-            self.stats["total_calls"] += 1
-            self.stats["gemini_calls"] += 1
-            response = self.gemini.model.generate_content(prompt, stream=True)
-            for chunk in response:
-                yield chunk.text
-        except Exception as e:
-            yield f"\n[Gemini Stream Error: {e}]\n"
+        self.stats["total_calls"] += 1
+        self.stats["gemini_calls"] += 1
+        
+        async for chunk in self.gemini.generate_stream(
+            prompt=prompt,
+            system_prompt=system_prompt,
+            messages=messages,
+            image_paths=image_paths
+        ):
+            yield chunk
 
     def get_routing_stats(self) -> Dict[str, int]:
         return self.stats

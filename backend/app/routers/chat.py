@@ -1,7 +1,9 @@
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect, Request
-from typing import List, Dict, Any
+from fastapi.responses import StreamingResponse
+from typing import List, Dict, Any, Optional
 import json
 import time
+import anyio
 
 from app.models.schemas import (
     ChatRequest, ChatResponse, AnalyzeResponse, 
@@ -18,12 +20,84 @@ from app.utils.confidence import (
 )
 from app.utils.prompts import (
     build_diagnosis_prompt, format_response_for_farmer, 
-    build_followup_prompt, SYSTEM_PROMPT
+    build_followup_prompt, SYSTEM_PROMPT, CONVERSATIONAL_SYSTEM_PROMPT
 )
 from app.limiter import limiter
 
 router = APIRouter()
 question_generator = FollowUpQuestionGenerator()
+
+@router.post("/stream")
+@limiter.limit("20/minute")
+async def chat_stream(
+    request: Request,
+    chat_request: ChatRequest,
+    retrieval=Depends(get_retrieval),
+    reranker=Depends(get_reranker),
+    llm_router=Depends(get_llm),
+    memory=Depends(get_memory),
+    input_sanitizer=Depends(get_input_sanitizer),
+    audit_logger=Depends(get_audit_logger)
+):
+    """
+    Streaming chat endpoint for multi-turn conversational AI.
+    Maintains context of animal, images, and symptoms.
+    """
+    try:
+        # 1. Load Session Context
+        context = await memory.get_session_context(chat_request.case_id)
+        if not context:
+            # Fallback for new chats if no case_id provided
+            animal_type = "unknown"
+            image_path = None
+            symptoms = ""
+        else:
+            animal_type = context["case"].get("animal_type", "unknown")
+            image_path = context["case"].get("image_path")
+            symptoms = context["case"].get("symptoms_text", "")
+
+        # 2. Sanitize & Save User Message
+        sanitized = input_sanitizer.sanitize_text(chat_request.message)
+        clean_msg = sanitized["sanitized_text"]
+        await memory.save_chat_message(chat_request.case_id, "user", clean_msg)
+
+        # 3. Load Chat History
+        history = await memory.get_chat_history(chat_request.case_id, last_n=10)
+        
+        # 4. Hybrid Retrieval (Augmenting context with technical data)
+        # We re-run retrieval to ensure the LLM has the latest medical context for the discussed symptoms
+        enriched_query = f"{symptoms} {clean_msg}"
+        retrieval_results = await retrieval.retrieve_all(image_path, enriched_query, animal_type)
+        reranked = await anyio.to_thread.run_sync(reranker.rerank_all, enriched_query, retrieval_results)
+        
+        # 5. Build Dynamic Knowledge Context
+        knowledge_str = "\n".join([c["text"] for c in reranked["knowledge_chunks"][:2]])
+        cases_str = "\n".join([f"- {c['metadata'].get('disease')}" for c in reranked["disease_candidates"][:3]])
+        
+        full_system_prompt = CONVERSATIONAL_SYSTEM_PROMPT + f"\n\nCURRENT CASE CONTEXT:\n- Animal: {animal_type}\n- Image Provided: {'Yes' if image_path else 'No'}\n- Knowledge Base:\n{knowledge_str}\n- Similar Cases Seen:\n{cases_str}"
+
+        # 6. Stream Generator
+        async def event_generator():
+            full_response = ""
+            async for chunk in llm_router.generate_streaming(
+                messages=history,
+                system_prompt=full_system_prompt,
+                image_paths=[image_path] if image_path else None
+            ):
+                full_response += chunk
+                # Standard SSE format
+                yield f"data: {json.dumps({'text': chunk})}\n\n"
+            
+            # Save Assistant Message at the end
+            await memory.save_chat_message(chat_request.case_id, "assistant", full_response)
+            yield "data: [DONE]\n\n"
+
+        return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+    except Exception as e:
+        print(f"Error in chat_stream: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 @router.post("/message", response_model=ChatResponse)
 @limiter.limit("20/minute")
@@ -66,8 +140,8 @@ async def chat_message(
         
         retrieval_start = time.time()
         image_path = context["case"].get("image_path")
-        results = retrieval.retrieve_all(image_path, enriched_symptoms, context["case"].get("animal_type"))
-        reranked = reranker.rerank_all(enriched_symptoms, results)
+        results = await retrieval.retrieve_all(image_path, enriched_symptoms, context["case"].get("animal_type"))
+        reranked = await anyio.to_thread.run_sync(reranker.rerank_all, enriched_symptoms, results)
         
         # 5. Recompute Confidence
         top_candidate = reranked["disease_candidates"][0]
@@ -126,6 +200,13 @@ async def chat_message(
 
         await memory.save_chat_message(chat_request.case_id, "assistant", assistant_text)
         
+        # 8. Generate Follow-up Questions
+        follow_up = question_generator.get_questions(
+            action=route_by_confidence(new_confidence)["action"],
+            disease_hint=top_candidate["metadata"].get("disease"),
+            answered=[] # Logic to track answered questions could be added here
+        )
+
         return ChatResponse(
             case_id=chat_request.case_id,
             response=assistant_text,

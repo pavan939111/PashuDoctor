@@ -28,6 +28,9 @@ def compute_confidence(
     # Clamp
     final_score = max(0.0, min(1.0, final_score))
     
+    # Clamp
+    final_score = max(0.0, min(1.0, final_score))
+    
     return {
         "score": float(final_score),
         "percentage": int(round(final_score * 100)),
@@ -40,20 +43,20 @@ def compute_confidence(
 def route_by_confidence(confidence_dict: Dict[str, Any]) -> Dict[str, Any]:
     score = confidence_dict["score"]
     
-    # Thresholds: 0.35, 0.60, 0.85
-    if score < 0.35:
+    # Thresholds: 0.25 (Lowered from 0.35), 0.60, 0.85
+    if score < 0.25:
         action = "ask_more"
         message = "Not enough information. Please answer a few questions."
         show_prediction = False
-    elif 0.35 <= score < 0.60:
+    elif 0.25 <= score < 0.55:
         action = "show_options"
         message = "Possible conditions identified. Please review."
         show_prediction = True
-    elif 0.60 <= score < 0.85:
+    elif 0.55 <= score < 0.80:
         action = "suggest"
         message = "Likely condition identified. Vet visit recommended."
         show_prediction = True
-    else: # score >= 0.85
+    else: # score >= 0.80
         action = "strong_suggest"
         message = "High confidence diagnosis. Consult vet immediately."
         show_prediction = True
@@ -117,9 +120,15 @@ def extract_scores_from_retrieval(
     disease_symptoms = DISEASE_SYMPTOM_MAP.get(disease, [])
     symptom_match = compute_symptom_match(provided_symptoms, disease_symptoms)
     
+    # NEW: Disease Mention Boost
+    # If the user explicitly mentions the disease name (e.g. "lumpy", "fmd"), we boost the score
+    mention_boost = 0.0
+    if disease.replace("_", " ") in " ".join(provided_symptoms).lower() or any(part in " ".join(provided_symptoms).lower() for part in disease.split("_")):
+        mention_boost = 0.2 # 20% boost for explicit naming
+        
     return {
         "image_similarity": image_sim,
-        "text_similarity": text_sim,
+        "text_similarity": min(1.0, text_sim + mention_boost),
         "symptom_match": symptom_match,
         "reranker_score": reranker_score
     }

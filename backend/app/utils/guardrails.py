@@ -108,9 +108,10 @@ class InputSanitizer:
         image_service
     ) -> dict:
         ANIMAL_PROMPTS = [
-            "a photo of a farm animal",
+            "a photo of a farm animal like a cow or goat",
             "a photo of livestock",
             "a photo of a cow buffalo goat or sheep",
+            "a close up photo of animal skin nodules or wounds",
             "a random object or landscape",
             "a photo of a person",
             "a blurry unclear image"
@@ -142,8 +143,8 @@ class InputSanitizer:
             top_match = ANIMAL_PROMPTS[top_idx]
             confidence = float(values[0])
             
-            # Non-animal indices are 3, 4, 5
-            if top_idx >= 3:
+            # Non-animal indices are now 4, 5, 6 (was 3, 4, 5)
+            if top_idx >= 4:
                 is_animal = False
                 reason = f"Image does not appear to contain livestock (Matched: {top_match})"
             elif confidence < 0.20:
@@ -211,7 +212,18 @@ class LLMOutputValidator:
         if parsed.get("vet_urgency") not in self.VALID_URGENCIES:
             parsed["vet_urgency"] = "within_24h"
             
-        # 4. Drug name detection
+        # 4. Consistency Check: Emergency vs Severity
+        if parsed.get("severity") == "emergency" and parsed.get("vet_urgency") != "immediate":
+            parsed["vet_urgency"] = "immediate"
+            
+        # 5. Hallucination Check: Disease Mapping
+        # If the primary diagnosis is not in our known list, we mark a warning
+        if parsed.get("primary_diagnosis").lower().replace(" ", "_") not in self.VALID_DISEASES:
+             # We allow it but log a warning if it's not "unknown"
+             if parsed.get("primary_diagnosis") != "unknown":
+                 logger.warning(f"Suspected hallucination: Unknown disease '{parsed.get('primary_diagnosis')}'")
+
+        # 6. Drug name detection and redaction
         full_text = json.dumps(parsed).lower()
         found_drugs = [drug for drug in self.BANNED_DRUG_NAMES if drug.lower() in full_text]
         warnings = []
@@ -219,7 +231,8 @@ class LLMOutputValidator:
             def sanitize_value(val):
                 if isinstance(val, str):
                     for drug in found_drugs:
-                        val = re.sub(re.escape(drug), "[REMOVED]", val, flags=re.IGNORECASE)
+                        # Replace with [REMOVED BY SAFETY FILTER]
+                        val = re.sub(re.escape(drug), "[REMOVED BY SAFETY FILTER]", val, flags=re.IGNORECASE)
                     return val
                 elif isinstance(val, list):
                     return [sanitize_value(v) for v in val]
@@ -236,7 +249,8 @@ class LLMOutputValidator:
             "sanitized_response": parsed,
             "drug_names_removed": found_drugs,
             "fields_validated": True,
-            "warnings": warnings
+            "warnings": warnings,
+            "hallucination_warning": parsed.get("primary_diagnosis") not in self.VALID_DISEASES
         }
 
     def validate_with_retry(self, prompt: str, gemini_service, system_prompt: str, image_paths: list = None, max_retries: int = 3) -> dict:

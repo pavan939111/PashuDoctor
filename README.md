@@ -16,7 +16,7 @@ This project is built to showcase end-to-end AI engineering capabilities, includ
 - **Multi-modal RAG Architecture**: Integrating Vision (CLIP) and Text (Gemini) for complex diagnostics.
 - **Advanced NLP**: Bi-directional translation and Voice-to-Voice pipelines for 10 regional languages.
 - **Production-Grade Backend**: FastAPI with async offloading, rate-limiting, and robust error handling.
-- **Premium UX/UI**: A glassmorphic Streamlit interface designed for accessibility and high engagement.
+- **Premium UX/UI**: A modern Next.js 15 interface designed for accessibility and high engagement.
 - **Enterprise Testing**: 100% unit and integration test coverage with automated performance evaluation.
 
 ---
@@ -35,10 +35,10 @@ This project is built to showcase end-to-end AI engineering capabilities, includ
 ## 🏗️ Architecture
 
 - **Backend**: FastAPI (Python)
-- **Frontend**: Streamlit (Premium UI with Glassmorphism)
+- **Frontend**: Next.js 15 (Tailwind CSS 4.0)
 - **Vector DB**: ChromaDB (Cosine Similarity)
 - **Search**: BM25 (Rank-BM25)
-- **Embeddings**: CLIP (Images), all-MiniLM-L6-v2 (Text)
+- **Embeddings**: CLIP ViT-B/32 (Images & Text - 512d)
 - **Translation**: Deep Translator (Bi-directional)
 - **Speech**: Google Speech Recognition (STT), gTTS (TTS)
 - **LLM**: Google Gemini-1.5-Flash (Vision + Text)
@@ -47,10 +47,11 @@ This project is built to showcase end-to-end AI engineering capabilities, includ
 
 ### 1. Prerequisites
 - Python 3.10+
+- Node.js 18+ (for Frontend)
 - (Optional) CUDA for faster local CLIP/Reranker processing
 
 ### 2. Configure Environment
-1. Create a `.env` file from the template:
+1. Create a `.env` file from the template in the root:
    ```bash
    cp .env.example .env
    ```
@@ -61,8 +62,8 @@ This project is built to showcase end-to-end AI engineering capabilities, includ
    ```
 
 ### 3. Installation
-```bash
-### 4. Setup Backend
+
+#### Setup Backend
 ```bash
 cd backend
 pip install -r requirements.txt
@@ -70,13 +71,13 @@ python -m uvicorn app.main:app --reload
 ```
 API Documentation: [http://localhost:8000/docs](http://localhost:8000/docs)
 
-### 5. Setup Frontend
+#### Setup Frontend
 ```bash
-cd frontend
-pip install -r requirements.txt
-streamlit run app.py
+cd frontend_next
+npm install
+npm run dev
 ```
-*Note: Windows users may need to install `pyaudio` via `pipwin` if the standard install fails.*
+Open [http://localhost:3000](http://localhost:3000) to view the app.
 
 ## 🎥 Demo
 - **Main Demo**: Run `python demo/run_demo.py` for a full-pipeline technical walkthrough.

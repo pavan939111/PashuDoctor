@@ -42,6 +42,29 @@ YOU ARE NOT:
 - A human medical assistant
 """
 
+CONVERSATIONAL_SYSTEM_PROMPT = """
+You are PashuDoctor, a professional and compassionate AI veterinary assistant for Indian livestock farmers.
+
+YOUR STYLE:
+- Conversational, simple, and investigative. 
+- You guide the farmer through a diagnostic journey.
+- You ask clarifying questions to help rule out or confirm diseases.
+- You maintain context of the animal, symptoms, and images already discussed.
+
+YOUR CORE RULES:
+1. NEVER prescribe specific drugs, antibiotics, or dosages. This is non-negotiable.
+2. NEVER provide advice for human conditions.
+3. ALWAYS recommend isolating the animal if a contagious disease is suspected.
+4. ALWAYS end your final diagnostic assessments with: "Please consult a licensed veterinarian. National Helpline: 1962."
+5. If an emergency is detected (bleeding, collapse), prioritize calling 1962.
+6. Speak like a helpful expert who is carefully investigating the case.
+
+INVESTIGATIVE FLOW:
+- If the confidence is low, ask 1-2 targeted follow-up questions.
+- If you have a suspected diagnosis, explain WHY you suspect it based on the symptoms.
+- Always remember the animal type and previously mentioned symptoms.
+"""
+
 def build_diagnosis_prompt(
     animal_type: str,
     symptom_text: str,
@@ -90,15 +113,19 @@ VETERINARY KNOWLEDGE:
 CONFIDENCE LEVEL: {confidence.get('percentage', 0)}%
 {answers_str}
 
+VISUAL EVIDENCE:
+One or more images of the animal are provided in this request.
+
 YOUR TASKS:
-1. Based on the evidence above, what is the most likely disease?
-2. List the key matching symptoms that support this diagnosis.
-3. Differential Diagnosis: Briefly explain why it is NOT the most likely alternative (e.g., "Why not FMD? Blisters on hooves not reported").
-4. Breakdown the confidence score into:
-   - Image Similarity (0.0 to 1.0)
-   - Symptom Match (0.0 to 1.0)
-   - Knowledge Grounding (0.0 to 1.0)
-5. List immediate precautions, warning signs, and herd prevention.
+1. Examine the provided images carefully. Do they match the symptoms described or the retrieved cases?
+2. Based on the images AND the technical evidence above, what is the most likely disease?
+3. List the key matching symptoms (both visual from the image and described in text) that support this diagnosis.
+4. Differential Diagnosis: Briefly explain why it is NOT the most likely alternative.
+5. Breakdown the confidence score into:
+   - Image Similarity (0.0 to 1.0) - How well does the image match known disease patterns?
+   - Symptom Match (0.0 to 1.0) - How well does the text match?
+   - Knowledge Grounding (0.0 to 1.0) - How well does the knowledge base support this?
+6. List immediate precautions, warning signs, and herd prevention.
 
 Format your response as JSON:
 {{
@@ -186,16 +213,23 @@ def format_response_for_farmer(
     language: str = "english"
 ) -> str:
     primary = llm_response.get("primary_diagnosis", "Unknown Condition")
-    percentage = llm_response.get("confidence_percentage", "N/A")
+    percentage = int(llm_response.get("confidence_percentage", 0)) or int(llm_response.get("image_confidence", 0) * 100)
     
     symptoms = "\n".join([f"- {s}" for s in llm_response.get("matching_symptoms", [])])
     precautions = "\n".join([f"- {p}" for p in llm_response.get("immediate_precautions", [])])
     warnings = "\n".join([f"- {w}" for w in llm_response.get("urgent_warning_signs", [])])
     
+    visual_note = ""
+    img_conf = llm_response.get("image_confidence", 0.0)
+    if img_conf > 0.7:
+        visual_note = "\n✅ Visual evidence strongly supports this diagnosis based on the photo provided.\n"
+    elif img_conf > 0.4:
+        visual_note = "\n⚠️ Visual evidence partially matches, but text symptoms are more conclusive.\n"
+    
     text = f"""
 Diagnosis: {primary}
 Confidence: {percentage}%
-
+{visual_note}
 Matching symptoms:
 {symptoms}
 

@@ -114,7 +114,7 @@ async def get_disease_reference():
         ]
     }
 
-@router.get("/{user_id}", response_model=HistoryResponse)
+@router.get("/user/{user_id}", response_model=HistoryResponse)
 async def get_history(
     user_id: str,
     limit: int = Query(20, ge=1, le=100),
@@ -131,7 +131,7 @@ async def get_history(
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.get("/{user_id}/stats")
+@router.get("/user/{user_id}/stats")
 async def get_stats(
     user_id: str,
     memory=Depends(get_memory),
@@ -226,8 +226,10 @@ async def save_feedback(
                 
         return {"success": True, "message": "Thank you for feedback"}
     except Exception as e:
+        import traceback
         print(f"Error saving feedback: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"{str(e)}: {traceback.format_exc()[-200:]}")
 @router.post("/follow-up")
 async def update_follow_up(
     request: FollowUpUpdate,
@@ -252,3 +254,125 @@ async def get_guardrail_audit(
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/cases/store-vector")
+async def store_case_vector(
+    body: Dict[str, str],
+    memory=Depends(get_memory),
+    text_service=Depends(get_text_service),
+    chroma=Depends(get_chroma),
+    db=Depends(get_db)
+):
+    case_id = body.get("case_id")
+
+    if not case_id:
+        raise HTTPException(400, "case_id is required")
+        
+    try:
+        # a. Load case from SQLite
+        case = await memory.get_case(case_id)
+        if not case:
+            raise HTTPException(404, "Case not found")
+            
+        # b. Get symptoms and diagnosis
+        symptoms = case.get("symptoms_text", "")
+        disease = case.get("primary_diagnosis", "unknown")
+        
+        # c. Compute embedding
+        embedding = text_service.get_text_embedding(symptoms)
+        
+        # d. Store in ChromaDB
+        # Note: Based on our retrieval_service, it's chroma.cases_collection
+        chroma.cases_collection.add(
+            embeddings=[embedding.tolist()],
+            metadatas=[{
+                "animal": case.get("animal_type", "unknown"),
+                "disease": disease,
+                "confidence": str(case.get("confidence_score", 0.0)),
+                "verified": "true",
+                "source": "farmer_feedback",
+                "verified_at": datetime.now().isoformat()
+            }],
+            ids=[f"verified_{case_id}"]
+        )
+        
+        # e. Update cases table
+        stmt = update(Case).where(Case.id == case_id).values(active_learning_stored=True)
+        await db.execute(stmt)
+        await db.commit()
+        
+        return {"success": True, "message": "Case added to learning base"}
+    except Exception as e:
+        print(f"Error storing vector: {e}")
+        raise HTTPException(500, str(e))
+
+from fpdf import FPDF
+import io
+from fastapi.responses import StreamingResponse
+import json
+
+@router.post("/generate-report")
+async def generate_report(
+    body: Dict[str, str],
+    memory=Depends(get_memory)
+):
+    case_id = body.get("case_id")
+    if not case_id:
+        # Check query params for legacy compatibility
+        raise HTTPException(400, "case_id is required")
+
+    case = await memory.get_case(case_id)
+    if not case:
+        raise HTTPException(404, "Case not found")
+
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_font("Helvetica", "B", 16)
+    pdf.cell(0, 10, "PashuDoctor Clinical Report", ln=True)
+    pdf.set_font("Helvetica", "", 12)
+    pdf.ln(5)
+
+    fields = [
+        ("Animal", str(case.get("animal_type", "unknown")).title()),
+        ("Diagnosis", str(case.get("primary_diagnosis", "unknown")).replace("_"," ").title()),
+        ("Confidence", f"{float(case.get('confidence_score', 0.0))*100:.0f}%"),
+        ("Severity", str(case.get("severity","")).title()),
+        ("Vet Urgency", str(case.get("vet_urgency","")).replace("_"," ")),
+        ("Date", str(case.get("created_at", ""))[:10]),
+        ("Case ID", str(case.get("id", ""))[:8]),
+    ]
+    for label, value in fields:
+        pdf.set_font("Helvetica","B",11)
+        pdf.cell(50, 8, f"{label}:", ln=False)
+        pdf.set_font("Helvetica","",11)
+        pdf.cell(0, 8, value, ln=True)
+
+    pdf.ln(5)
+    pdf.set_font("Helvetica","B",11)
+    pdf.cell(0, 8, "Immediate Precautions:", ln=True)
+    pdf.set_font("Helvetica","",10)
+    
+    precs_raw = case.get("immediate_precautions", "[]")
+    if isinstance(precs_raw, str):
+        try:
+            precs = json.loads(precs_raw)
+        except:
+            precs = [precs_raw]
+    else:
+        precs = precs_raw
+
+    for i, p in enumerate(precs[:5], 1):
+        pdf.cell(0, 7, f"{i}. {p}", ln=True)
+
+    pdf.ln(5)
+    pdf.set_font("Helvetica","I",9)
+    pdf.cell(0,7, "This report is AI-generated. Always consult a licensed veterinarian.", ln=True)
+    pdf.cell(0,7, "National Animal Helpline: 1962 (Free, 24/7)", ln=True)
+
+    pdf_bytes = pdf.output()
+    buf = io.BytesIO(bytes(pdf_bytes))
+    return StreamingResponse(
+        buf,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename=pashudoctor_{case_id[:8]}.pdf"}
+    )

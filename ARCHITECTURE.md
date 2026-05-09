@@ -8,8 +8,8 @@
 └───────────────────┬─────────────────────────┘
                     ↓
 ┌─────────────────────────────────────────────┐
-│             FRONTEND (Streamlit)            │
-│  UI Components │ Language SVC │ Speech SVC  │
+│             FRONTEND (Next.js 15)           │
+│  UI Components │ Tailwind 4.0 │ Lucide Icons│
 └───────────────────┬─────────────────────────┘
                     ↓ (REST API / WebSocket)
 ┌─────────────────────────────────────────────┐
@@ -38,19 +38,18 @@
 ## 2. Component Architecture
 
 ### 2.1 Frontend Layer
-frontend/
-├── app.py                    # Main entry point and global session state management.
+frontend_next/
+├── app/                      # Next.js App Router (Page, Layouts, Globals).
 ├── components/
-│   ├── home.py              # Handles the core diagnostic workflow and image uploads.
-│   ├── chat.py              # Provides the multi-turn conversational AI interface.
-│   ├── history.py           # Manages the display and management of past case records.
-│   ├── about.py             # Contains help documentation and system diagnostic tools.
-│   ├── multilingual_input.py # Unified widget for speech-to-text and multilingual text.
-│   ├── vet_locator.py       # Geolocation-based vet finder and helpline directory.
-│   └── ui_components.py     # Reusable premium UI elements and shared styles.
-└── services/
-    ├── language_service.py  # Orchestrates translation, TTS, and localized data.
-    └── speech_service.py    # Manages online and offline (Whisper) transcription.
+│   ├── ChatInterface.tsx     # Provides the multi-turn conversational AI interface.
+│   ├── Sidebar.tsx           # Manages the display and management of past case records.
+│   ├── AnalysisReport.tsx    # Visualizes structured clinical reports and confidence scores.
+│   └── ImageUpload.tsx       # Handles multimodal image ingestion and previews.
+├── lib/
+│   ├── utils.ts              # Shared utility functions and Tailwind merging.
+│   └── api.ts                # Client-side API orchestration for FastAPI communication.
+└── types/
+    └── index.ts              # TypeScript definitions for Cases, Messages, and AI Responses.
 
 ### 2.2 Backend Layer
 backend/app/
@@ -105,10 +104,10 @@ data/
 5. API saves images to `data/uploads/`. (~20ms)
 6. `ImageService` runs quality check and species detection via CLIP. (~150ms)
 7. `ImageService` extracts visual embeddings (512d). (~200ms)
-8. `TextService` extracts symptom embeddings (384d). (~100ms)
+8. `TextService` extracts symptom embeddings (512d). (~100ms)
 9. `RetrievalService` performs Dense Search in ChromaDB. (~50ms)
 10. `RetrievalService` performs Sparse Search via BM25. (~30ms)
-11. `HybridRetrieval` fuses scores using 0.3/0.7 weighting. (~10ms)
+11. `HybridRetrieval` fuses scores using 0.5/0.5 weighting. (~10ms)
 12. `RerankerService` scores top 20 candidates via Cross-Encoder. (~400ms)
 13. `ConfidenceUtils` computes multi-factor score (Image + Text + Symptoms). (~5ms)
 14. `LLMRouter` selects Gemini model based on confidence. (~10ms)
@@ -182,10 +181,10 @@ CREATE TABLE chat_messages (
   - Metric: Cosine | Dims: 512 | Records: ~5k
   - Metadata: {animal: str, disease: str, severity: str}
 - **knowledge_base**: 
-  - Metric: Cosine | Dims: 384 | Records: ~1.2k
+  - Metric: Cosine | Dims: 512 | Records: ~1.2k
   - Metadata: {source: str, disease_tags: str}
 - **resolved_cases**: 
-  - Metric: Cosine | Dims: 384 | Records: Dynamic
+  - Metric: Cosine | Dims: 512 | Records: Dynamic
   - Metadata: {case_id: str, verified: bool}
 
 ### 4.3 LRU Cache Structure

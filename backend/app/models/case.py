@@ -2,7 +2,7 @@ import uuid
 from sqlalchemy import Column, String, DateTime, Float, ForeignKey, Boolean, JSON, text
 from sqlalchemy.sql import func
 from sqlalchemy.dialects.postgresql import UUID
-from app.database import Base
+from app.models.base import Base
 
 class Case(Base):
     __tablename__ = "cases"
@@ -43,6 +43,7 @@ class Case(Base):
     follow_up_status = Column(String) # better/same/worse
     timeline = Column(JSON) # [{"day": 1, "note": "...", "status": "..."}]
     is_closed = Column(Boolean, default=False)
+    active_learning_stored = Column(Boolean, default=False)
     
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())

@@ -1,0 +1,78 @@
+@import "tailwindcss";
+
+@theme {
+  --color-background: hsl(40 20% 97%);
+  --color-foreground: hsl(20 10% 10%);
+  --color-primary: hsl(142 45% 24%);
+  --color-primary-foreground: hsl(0 0% 100%);
+  --color-secondary: hsl(24 10% 90%);
+  --color-secondary-foreground: hsl(24 10% 20%);
+  --color-accent: hsl(142 35% 36%);
+  --color-accent-foreground: hsl(0 0% 100%);
+  --color-muted: hsl(24 10% 95%);
+  --color-muted-foreground: hsl(24 10% 45%);
+  --color-border: hsl(24 10% 88%);
+}
+
+@layer base {
+  body {
+    @apply bg-background text-foreground;
+    font-feature-settings: "rlig" 1, "calt" 1;
+  }
+}
+
+@layer components {
+  .chat-bubble-user {
+    @apply bg-primary text-primary-foreground rounded-2xl rounded-tr-none px-4 py-3 shadow-sm max-w-[85%];
+  }
+  
+  .chat-bubble-ai {
+    @apply bg-white border border-stone-200 text-stone-900 rounded-2xl rounded-tl-none px-4 py-3 shadow-sm max-w-[85%];
+  }
+
+  .premium-card {
+    @apply bg-white border border-stone-200 rounded-2xl shadow-sm transition-all hover:shadow-md;
+  }
+
+  .glass-header {
+    @apply sticky top-0 z-50 backdrop-blur-md bg-white/80 border-b border-stone-200;
+  }
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #E5E7EB;
+  border-radius: 10px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #D1D5DB;
+}
+
+/* Animations */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.3s ease-out forwards;
+}
+
+.thinking-dot {
+  @apply w-1.5 h-1.5 bg-stone-400 rounded-full inline-block mr-1;
+  animation: bounce 1.4s infinite ease-in-out both;
+}
+
+.thinking-dot:nth-child(1) { animation-delay: -0.32s; }
+.thinking-dot:nth-child(2) { animation-delay: -0.16s; }
+
+@keyframes bounce {
+  0%, 80%, 100% { transform: scale(0); }
+  40% { transform: scale(1.0); }
+}

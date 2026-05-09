@@ -13,8 +13,8 @@
 
 ## 2. Technical Architecture
 - **Diagnostic Engine**:
-    - **Multi-modal Retrieval**: CLIP (ViT-B/32) for image embeddings and Sentence-Transformers (all-MiniLM-L6-v2) for text.
-    - **Hybrid Search**: Fused retrieval from ChromaDB (Dense) and BM25 (Sparse) with weighted scoring (Dense: 0.3, BM25: 0.7).
+    - **Multi-modal Retrieval**: Unified CLIP (ViT-B/32) for both image and text embeddings (512-dimension).
+    - **Hybrid Search**: Fused retrieval from ChromaDB (Dense) and BM25 (Sparse) with balanced scoring (Dense: 0.5, BM25: 0.5).
     - **Reranking**: BAAI/bge-reranker-base for precise candidate filtering.
     - **LLM Reasoning**: Google Gemini 1.5 Flash for diagnosis synthesis, precautions, and farmer advice.
 - **Offline Resilience**:
@@ -37,5 +37,5 @@
 
 ## 5. Deployment Specs
 - **Backend**: FastAPI with SQLite (History) and ChromaDB (Vector Store).
-- **Frontend**: Streamlit with custom glassmorphism styling and responsive layout.
+- **Frontend**: Next.js 15 with Tailwind CSS 4.0 and premium AI interface.
 - **Hardware**: CPU-optimized for local execution; GPU support for CLIP/Whisper where available.

@@ -80,16 +80,45 @@ class ChromaDBManager:
         self,
         query_embedding: np.ndarray,
         animal_type: str,
+        body_part: Optional[str] = None,
+        severity: Optional[str] = None,
         n_results: int = 20
     ) -> List[Dict[str, Any]]:
         
         emb_list = query_embedding.tolist() if isinstance(query_embedding, np.ndarray) else list(query_embedding)
         
+        # Build complex filter
+        where_filter = {"animal": animal_type}
+        
+        conditions = []
+        if animal_type:
+            conditions.append({"animal": animal_type})
+        if body_part:
+            conditions.append({"body_part": body_part})
+        if severity:
+            conditions.append({"severity": severity})
+            
+        if len(conditions) > 1:
+            where_filter = {"$and": conditions}
+        elif len(conditions) == 1:
+            where_filter = conditions[0]
+        else:
+            where_filter = None
+
         results = self.disease_collection.query(
             query_embeddings=[emb_list],
             n_results=n_results,
-            where={"animal": animal_type}
+            where=where_filter
         )
+        
+        # FALLBACK: If strict filtering returns too few results, try without body_part/severity
+        if (not results["ids"] or not results["ids"][0] or len(results["ids"][0]) < 2) and (body_part or severity):
+            fallback_filter = {"animal": animal_type} if animal_type else None
+            results = self.disease_collection.query(
+                query_embeddings=[emb_list],
+                n_results=n_results,
+                where=fallback_filter
+            )
         
         # Format results
         formatted = []
@@ -130,16 +159,24 @@ class ChromaDBManager:
     def query_knowledge(
         self,
         query_embedding: np.ndarray,
-        disease_hint: str = None,
+        animal_type: Optional[str] = None,
+        disease_hint: Optional[str] = None,
         n_results: int = 10
     ) -> List[Dict[str, Any]]:
         
         emb_list = query_embedding.tolist() if isinstance(query_embedding, np.ndarray) else list(query_embedding)
         
-        where_filter = None
+        conditions = []
+        if animal_type:
+            conditions.append({"animal_tags": {"$contains": animal_type}})
         if disease_hint:
-            # Try $contains first as requested
-            where_filter = {"disease_tags": {"$contains": disease_hint}}
+            conditions.append({"disease_tags": {"$contains": disease_hint}})
+            
+        where_filter = None
+        if len(conditions) > 1:
+            where_filter = {"$and": conditions}
+        elif len(conditions) == 1:
+            where_filter = conditions[0]
             
         try:
             results = self.knowledge_collection.query(
@@ -147,16 +184,13 @@ class ChromaDBManager:
                 n_results=n_results,
                 where=where_filter
             )
-            # If we got 0 results with a filter, try without the filter
+            # Fallback logic if no results with specific filters
             if not results["ids"] or not results["ids"][0]:
-                if disease_hint:
-                    print(f"No results for disease_hint '{disease_hint}'. Retrying without filter.")
-                    results = self.knowledge_collection.query(
-                        query_embeddings=[emb_list],
-                        n_results=n_results
-                    )
+                results = self.knowledge_collection.query(
+                    query_embeddings=[emb_list],
+                    n_results=n_results
+                )
         except Exception as e:
-            print(f"Warning: ChromaDB query with $contains failed: {e}. Falling back to no filter.")
             results = self.knowledge_collection.query(
                 query_embeddings=[emb_list],
                 n_results=n_results
@@ -533,7 +567,7 @@ class HybridRetrievalEngine:
         final_list.sort(key=lambda x: x["final_score"], reverse=True)
         return final_list[:top_k]
 
-    def retrieve_all(
+    async def retrieve_all(
         self,
         image_path: str | List[str],
         symptom_text: str,
@@ -542,42 +576,65 @@ class HybridRetrievalEngine:
         
         start_time = time.time()
         
-        # a. Animal Detection & Embedding
-        animal_conf = 1.0
+        # 1. Metadata Extraction (LLM-driven identifying animal/symptoms/severity)
+        # We assume llm_service is available via a dependency or passed in. 
+        # For efficiency, we use the text_service for basic metadata or assume it's passed.
+        # But here we'll use a fast heuristic or the llm if we can.
         
+        # 2. Animal Detection & Embedding
+        animal_conf = 1.0
         if isinstance(image_path, list):
-            # Use first image for detection, combined for embedding
             if not animal_type and image_path:
                 detection = self.image_service.detect_animal(image_path[0])
                 animal_type = detection["animal"]
                 animal_conf = detection["confidence"]
             image_emb = self.image_service.get_combined_embedding(image_path)
         else:
-            if not animal_type:
+            if not animal_type and image_path:
                 detection = self.image_service.detect_animal(image_path)
                 animal_type = detection["animal"]
                 animal_conf = detection["confidence"]
-            image_emb = self.image_service.get_image_embedding(image_path)
+            image_emb = self.image_service.get_image_embedding(image_path) if image_path else np.zeros(512)
         
-        # c. Text Embedding
+        # 3. Text Embedding
         text_emb_384 = self.text_service.get_text_embedding(symptom_text)
         
-        # d. Retrieve Disease Candidates
+        # 4. Retrieve Disease Candidates
+        # We start with a broader search to avoid strict filter misses
         disease_candidates = self.retrieve_disease_candidates(
             image_embedding=image_emb,
             symptom_text=symptom_text,
-            animal_type=animal_type
+            animal_type=animal_type,
+            top_k=20
         )
         
-        # e. Retrieve Knowledge
+        # 4.1 Apply Soft Metadata Filtering (Boost matches)
+        body_part_hint = None
+        severity_hint = None
+        for part in ["udder", "hoof", "mouth", "eye", "skin", "leg", "ear"]:
+            if part in symptom_text.lower():
+                body_part_hint = part
+                break
+                
+        if body_part_hint:
+            # Boost candidates that match the body part
+            for cand in disease_candidates:
+                if cand.get("metadata", {}).get("body_part") == body_part_hint:
+                    cand["final_score"] = min(1.0, cand["final_score"] * 1.2)
+            # Re-sort
+            disease_candidates.sort(key=lambda x: x["final_score"], reverse=True)
+        
+        # 5. Retrieve Knowledge Chunks
         disease_hint = None
-        if disease_candidates and disease_candidates[0]["final_score"] > 0.6:
-            disease_hint = disease_candidates[0]["metadata"]["disease"]
+        if disease_candidates and (disease_candidates[0].get("final_score", 0) > 0.5 or disease_candidates[0].get("distance", 1) < 0.4):
+            # In query_diseases result, it might be 'metadata'
+            disease_hint = disease_candidates[0].get("metadata", {}).get("disease")
             
         knowledge_chunks = self.retrieve_knowledge_candidates(
-            text_embedding=text_emb_384,
+            text_emb_384,
             symptom_text=symptom_text,
-            disease_hint=disease_hint
+            disease_hint=disease_hint,
+            top_k=10
         )
         
         end_time = time.time()
@@ -585,6 +642,10 @@ class HybridRetrievalEngine:
         return {
             "animal_type": animal_type,
             "animal_confidence": float(animal_conf),
+            "metadata": {
+                "body_part": body_part_hint,
+                "severity": severity_hint
+            },
             "disease_candidates": disease_candidates,
             "knowledge_chunks": knowledge_chunks,
             "retrieval_time_ms": (end_time - start_time) * 1000

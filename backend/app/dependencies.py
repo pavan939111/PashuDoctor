@@ -1,5 +1,6 @@
 import os
 import time
+import anyio
 from typing import AsyncGenerator
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import async_session, engine
@@ -36,7 +37,7 @@ async def initialise_services():
 
     # 2. Text Embedding
     _text_service = TextEmbeddingService()
-    print("[OK] TextEmbeddingService loaded (SentenceTransformer)")
+    print("[OK] TextEmbeddingService loaded (CLIP - 512d)")
 
     # 3. ChromaDB
     _chroma = ChromaDBManager()
