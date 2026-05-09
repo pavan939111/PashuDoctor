@@ -145,9 +145,9 @@ def show_home_page():
             if diagnosis and confidence.get("show_prediction"):
                 st.markdown('<div class="pd-card">', unsafe_allow_html=True)
                 
-                # Render translated diagnosis response with tabs and TTS
+                # Render translated diagnosis response with tabs, evidence breakdown, and TTS
                 render_translated_response(
-                    english_response=diagnosis["formatted_response"],
+                    diagnosis=diagnosis,
                     target_language=language,
                     speak=True
                 )

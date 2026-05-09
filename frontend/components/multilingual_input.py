@@ -99,13 +99,17 @@ def render_speech_text_input(
     return text_value
 
 def render_translated_response(
-    english_response: str,
+    diagnosis: dict,
     target_language: str,
     speak: bool = True
 ) -> None:
     """
-    Renders an English response with an optional translation and TTS.
+    Renders an English response with an optional translation, evidence, and TTS.
     """
+    if not diagnosis:
+        return
+
+    english_response = diagnosis.get("formatted_response", "")
     if not english_response:
         return
 
@@ -127,6 +131,36 @@ def render_translated_response(
     with tab1:
         st.markdown(translated)
         
+        # Evidence Section
+        st.divider()
+        st.markdown(f"### 🔍 {language_service.translate_from_english('Diagnosis Evidence', target_language)}")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            st.write(f"**📍 {language_service.translate_from_english('Similar Cases Found', target_language)}:**")
+            st.write(f"{diagnosis.get('similar_cases_count', 0)} {diagnosis.get('similar_cases_type', 'cases')}")
+            
+            st.write(f"**✅ {language_service.translate_from_english('Matched Symptoms', target_language)}:**")
+            st.write(", ".join(diagnosis.get("matching_symptoms", [])))
+
+        with col2:
+            st.write(f"**📊 {language_service.translate_from_english('Confidence Breakdown', target_language)}:**")
+            
+            img_conf = diagnosis.get('image_confidence', 0.0)
+            st.caption(f"Image Similarity: {int(img_conf*100)}%")
+            st.progress(img_conf)
+            
+            sym_conf = diagnosis.get('symptom_confidence', 0.0)
+            st.caption(f"Symptom Match: {int(sym_conf*100)}%")
+            st.progress(sym_conf)
+            
+            knw_conf = diagnosis.get('knowledge_confidence', 0.0)
+            st.caption(f"Knowledge Match: {int(knw_conf*100)}%")
+            st.progress(knw_conf)
+
+        if diagnosis.get("differential_reasoning"):
+            st.info(f"**⚖️ {language_service.translate_from_english('Expert Reasoning', target_language)}:**\n{diagnosis.get('differential_reasoning')}")
+
         if speak:
             if st.button("🔊 Read aloud", key=f"tts_{uuid.uuid4()}"):
                 with st.spinner("Generating audio..."):
@@ -142,14 +176,17 @@ def render_translated_response(
                         with open(audio_path, "rb") as f:
                             audio_bytes = f.read()
                         st.audio(audio_bytes, format="audio/mp3")
-                        # Note: We can't easily remove the file here because st.audio 
-                        # needs it to stay available for the browser to stream it.
-                        # Usually we'd clean up temp files periodically.
                     else:
                         st.error("Could not generate audio.")
 
     with tab2:
         st.markdown(english_response)
+        st.divider()
+        st.markdown("### 🔍 Diagnosis Evidence (English)")
+        st.write(f"**Similar cases found:** {diagnosis.get('similar_cases_count', 0)} {diagnosis.get('similar_cases_type', 'cases')}")
+        st.write(f"**Matched symptoms:** {', '.join(diagnosis.get('matching_symptoms', []))}")
+        if diagnosis.get("differential_reasoning"):
+            st.info(f"**Reasoning:** {diagnosis.get('differential_reasoning')}")
 
 def render_multilingual_symptom_checklist(
     language: str

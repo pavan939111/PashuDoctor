@@ -170,16 +170,27 @@ async def analyze_image(
                     diag_data = json.loads(text)
                     formatted = format_response_for_farmer(diag_data, language)
                     
+                    # Similar cases info
+                    sim_count = len(reranked_results.get("disease_candidates", []))
+                    primary_name = diag_data.get("primary_diagnosis", "Unknown")
+                    sim_type = f"{primary_name} cases in {detected_animal}s"
+                    
                     diagnosis = DiagnosisResult(
-                        primary_diagnosis=diag_data.get("primary_diagnosis", "Unknown"),
+                        primary_diagnosis=primary_name,
                         alternative_diagnoses=diag_data.get("alternative_diagnoses", []),
                         matching_symptoms=diag_data.get("matching_symptoms", []),
+                        differential_reasoning=diag_data.get("differential_reasoning", ""),
+                        image_confidence=diag_data.get("image_confidence", confidence.get("image_sim", 0.0)),
+                        symptom_confidence=diag_data.get("symptom_confidence", confidence.get("symptom_match", 0.0)),
+                        knowledge_confidence=diag_data.get("knowledge_confidence", confidence.get("text_sim", 0.0)),
+                        similar_cases_count=sim_count,
+                        similar_cases_type=sim_type,
                         immediate_precautions=diag_data.get("immediate_precautions", []),
                         urgent_warning_signs=diag_data.get("urgent_warning_signs", []),
                         herd_prevention=diag_data.get("herd_prevention", []),
                         farmer_advice=diag_data.get("farmer_advice", ""),
                         vet_urgency=diag_data.get("vet_urgency", "monitor"),
-                        severity="moderate", # Default or derived from diagnosis if available
+                        severity="moderate",
                         formatted_response=formatted
                     )
                 except Exception as e:
@@ -194,7 +205,18 @@ async def analyze_image(
             "symptoms_text": symptom_text,
             "image_path": temp_path,
             "primary_diagnosis": diagnosis.primary_diagnosis if diagnosis else "Pending",
+            "alternative_diagnoses": diagnosis.alternative_diagnoses if diagnosis else [],
+            "matching_symptoms": diagnosis.matching_symptoms if diagnosis else [],
+            "differential_reasoning": diagnosis.differential_reasoning if diagnosis else "",
+            "image_confidence": diagnosis.image_confidence if diagnosis else 0.0,
+            "symptom_confidence": diagnosis.symptom_confidence if diagnosis else 0.0,
+            "knowledge_confidence": diagnosis.knowledge_confidence if diagnosis else 0.0,
+            "similar_cases_count": diagnosis.similar_cases_count if diagnosis else 0,
+            "similar_cases_type": diagnosis.similar_cases_type if diagnosis else "",
             "confidence_score": confidence["score"],
+            "severity": diagnosis.severity if diagnosis else "unknown",
+            "vet_urgency": diagnosis.vet_urgency if diagnosis else "monitor",
+            "immediate_precautions": diagnosis.immediate_precautions if diagnosis else [],
             "llm_model_used": model_used,
             "retrieval_time_ms": retrieval_time
         }
@@ -341,10 +363,21 @@ async def analyze_text(
                     diag_data = json.loads(text)
                     formatted = format_response_for_farmer(diag_data, request_body.language)
                     
+                    # Similar cases info
+                    sim_count = len(reranked_results.get("disease_candidates", []))
+                    primary_name = diag_data.get("primary_diagnosis", "Unknown")
+                    sim_type = f"{primary_name} cases in {request_body.animal_type or 'animal'}s"
+
                     diagnosis = DiagnosisResult(
-                        primary_diagnosis=diag_data.get("primary_diagnosis", "Unknown"),
+                        primary_diagnosis=primary_name,
                         alternative_diagnoses=diag_data.get("alternative_diagnoses", []),
                         matching_symptoms=diag_data.get("matching_symptoms", []),
+                        differential_reasoning=diag_data.get("differential_reasoning", ""),
+                        image_confidence=diag_data.get("image_confidence", 0.0),
+                        symptom_confidence=diag_data.get("symptom_confidence", confidence.get("symptom_match", 0.0)),
+                        knowledge_confidence=diag_data.get("knowledge_confidence", confidence.get("text_sim", 0.0)),
+                        similar_cases_count=sim_count,
+                        similar_cases_type=sim_type,
                         immediate_precautions=diag_data.get("immediate_precautions", []),
                         urgent_warning_signs=diag_data.get("urgent_warning_signs", []),
                         herd_prevention=diag_data.get("herd_prevention", []),
@@ -363,7 +396,18 @@ async def analyze_text(
             "symptoms_text": request_body.symptom_text,
             "image_path": None,
             "primary_diagnosis": diagnosis.primary_diagnosis if diagnosis else "Pending",
+            "alternative_diagnoses": diagnosis.alternative_diagnoses if diagnosis else [],
+            "matching_symptoms": diagnosis.matching_symptoms if diagnosis else [],
+            "differential_reasoning": diagnosis.differential_reasoning if diagnosis else "",
+            "image_confidence": diagnosis.image_confidence if diagnosis else 0.0,
+            "symptom_confidence": diagnosis.symptom_confidence if diagnosis else 0.0,
+            "knowledge_confidence": diagnosis.knowledge_confidence if diagnosis else 0.0,
+            "similar_cases_count": diagnosis.similar_cases_count if diagnosis else 0,
+            "similar_cases_type": diagnosis.similar_cases_type if diagnosis else "",
             "confidence_score": confidence["score"],
+            "severity": diagnosis.severity if diagnosis else "unknown",
+            "vet_urgency": diagnosis.vet_urgency if diagnosis else "monitor",
+            "immediate_precautions": diagnosis.immediate_precautions if diagnosis else [],
             "llm_model_used": model_used,
             "retrieval_time_ms": retrieval_time
         }

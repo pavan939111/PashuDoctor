@@ -63,16 +63,23 @@ CONFIDENCE LEVEL: {confidence.get('percentage', 0)}%
 
 YOUR TASKS:
 1. Based on the evidence above, what is the most likely disease?
-2. List the key matching symptoms that support this diagnosis
-3. What immediate precautions should the farmer take?
-4. What are the warning signs that need urgent vet attention?
-5. Are there any preventive measures for the herd?
+2. List the key matching symptoms that support this diagnosis.
+3. Differential Diagnosis: Briefly explain why it is NOT the most likely alternative (e.g., "Why not FMD? Blisters on hooves not reported").
+4. Breakdown the confidence score into:
+   - Image Similarity (0.0 to 1.0)
+   - Symptom Match (0.0 to 1.0)
+   - Knowledge Grounding (0.0 to 1.0)
+5. List immediate precautions, warning signs, and herd prevention.
 
 Format your response as JSON:
 {{
   "primary_diagnosis": "string",
   "alternative_diagnoses": ["string"],
   "matching_symptoms": ["string"],
+  "differential_reasoning": "string",
+  "image_confidence": float,
+  "symptom_confidence": float,
+  "knowledge_confidence": float,
   "immediate_precautions": ["string"],
   "urgent_warning_signs": ["string"],
   "herd_prevention": ["string"],

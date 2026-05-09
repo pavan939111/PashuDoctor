@@ -16,6 +16,16 @@ class Case(Base):
     
     primary_diagnosis = Column(String)
     alternative_diagnoses = Column(JSON) # List of alternative conditions
+    matching_symptoms = Column(JSON)
+    differential_reasoning = Column(String)
+    
+    # Evidence breakdown
+    image_confidence = Column(Float)
+    symptom_confidence = Column(Float)
+    knowledge_confidence = Column(Float)
+    similar_cases_count = Column(Float)
+    similar_cases_type = Column(String)
+    
     confidence_score = Column(Float)
     severity = Column(String)
     vet_urgency = Column(String)

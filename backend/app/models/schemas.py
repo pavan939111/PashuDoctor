@@ -89,6 +89,15 @@ class DiagnosisResult(BaseModel):
     primary_diagnosis: str
     alternative_diagnoses: list[str]
     matching_symptoms: list[str]
+    differential_reasoning: str = "" # "Why not FMD? Blisters on hooves not reported"
+    
+    # Evidence breakdown
+    image_confidence: float = 0.0
+    symptom_confidence: float = 0.0
+    knowledge_confidence: float = 0.0
+    similar_cases_count: int = 0
+    similar_cases_type: str = "" # "mastitis cases in cows"
+    
     immediate_precautions: list[str]
     urgent_warning_signs: list[str]
     herd_prevention: list[str]

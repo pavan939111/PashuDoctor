@@ -26,6 +26,13 @@ class MemoryService:
                 image_path=case_data.get("image_path"),
                 primary_diagnosis=case_data.get("primary_diagnosis"),
                 alternative_diagnoses=case_data.get("alternative_diagnoses", []),
+                matching_symptoms=case_data.get("matching_symptoms", []),
+                differential_reasoning=case_data.get("differential_reasoning", ""),
+                image_confidence=case_data.get("image_confidence", 0.0),
+                symptom_confidence=case_data.get("symptom_confidence", 0.0),
+                knowledge_confidence=case_data.get("knowledge_confidence", 0.0),
+                similar_cases_count=case_data.get("similar_cases_count", 0),
+                similar_cases_type=case_data.get("similar_cases_type", ""),
                 confidence_score=case_data.get("confidence_score", 0.0),
                 severity=case_data.get("severity", "unknown"),
                 vet_urgency=case_data.get("vet_urgency", "monitor"),
@@ -164,10 +171,32 @@ class MemoryService:
                 "severity": case_obj.severity
             }
             
+            diagnosis_dict = {
+                "primary_diagnosis": case_obj.primary_diagnosis,
+                "alternative_diagnoses": case_obj.alternative_diagnoses,
+                "matching_symptoms": case_obj.matching_symptoms,
+                "differential_reasoning": case_obj.differential_reasoning,
+                "image_confidence": case_obj.image_confidence,
+                "symptom_confidence": case_obj.symptom_confidence,
+                "knowledge_confidence": case_obj.knowledge_confidence,
+                "similar_cases_count": case_obj.similar_cases_count,
+                "similar_cases_type": case_obj.similar_cases_type,
+                "immediate_precautions": case_obj.immediate_precautions,
+                "vet_urgency": case_obj.vet_urgency,
+                "severity": case_obj.severity,
+                "farmer_advice": "" # This is usually reconstructed from diagnosis logic
+            }
+            
+            confidence_dict = {
+                "score": case_obj.confidence_score,
+                "percentage": int(case_obj.confidence_score * 100),
+                "show_prediction": True
+            }
+
             return {
                 "case": case_dict,
                 "chat_history": chat_history,
                 "answered_questions": answered,
-                "current_diagnosis": case_obj.primary_diagnosis,
-                "current_confidence": case_obj.confidence_score
+                "current_diagnosis": diagnosis_dict,
+                "current_confidence": confidence_dict
             }
