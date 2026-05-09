@@ -2,6 +2,13 @@
 
 PashuDoctor is a production-ready AI-powered platform designed to assist Indian farmers in diagnosing livestock health issues. It leverages a Multi-Modal RAG (Retrieval-Augmented Generation) pipeline powered by **Google Gemini** for high-accuracy diagnostics and localized advice.
 
+## Documentation
+| | |
+|---|---|
+| Full Implementation | [IMPLEMENTATION.md](./IMPLEMENTATION.md) |
+| Setup & Run Guide | [SETUP_AND_RUN.md](./SETUP_AND_RUN.md) |
+| System Architecture | [ARCHITECTURE.md](./ARCHITECTURE.md) |
+
 ---
 
 ### 🌟 Technical Showcase

@@ -40,20 +40,20 @@ def compute_confidence(
 def route_by_confidence(confidence_dict: Dict[str, Any]) -> Dict[str, Any]:
     score = confidence_dict["score"]
     
-    # Thresholds: 0.50, 0.75, 0.90
-    if score < 0.50:
+    # Thresholds: 0.35, 0.60, 0.85
+    if score < 0.35:
         action = "ask_more"
         message = "Not enough information. Please answer a few questions."
         show_prediction = False
-    elif 0.50 <= score < 0.75:
+    elif 0.35 <= score < 0.60:
         action = "show_options"
         message = "Possible conditions identified. Please review."
         show_prediction = True
-    elif 0.75 <= score < 0.90:
+    elif 0.60 <= score < 0.85:
         action = "suggest"
         message = "Likely condition identified. Vet visit recommended."
         show_prediction = True
-    else: # score >= 0.90
+    else: # score >= 0.85
         action = "strong_suggest"
         message = "High confidence diagnosis. Consult vet immediately."
         show_prediction = True
@@ -77,12 +77,13 @@ def compute_symptom_match(
     set_disease = set(s.lower().strip() for s in disease_symptoms)
     
     intersection = set_provided.intersection(set_disease)
-    union = set_provided.union(set_disease)
     
-    if not union:
+    if not set_disease:
         return 0.0
         
-    return float(len(intersection) / len(union))
+    # Recall-based scoring: How many of the required symptoms were mentioned?
+    # This is better for long user sentences.
+    return float(len(intersection) / len(set_disease))
 
 def extract_scores_from_retrieval(
     top_candidate: Dict[str, Any],
@@ -91,8 +92,8 @@ def extract_scores_from_retrieval(
 ) -> Dict[str, Any]:
     # Extract values
     image_sim = top_candidate.get("dense_score", 0.0)
-    # final_score in retrieval is combined dense+bm25
-    text_sim = top_candidate.get("final_score", 0.0) 
+    # combined_score from reranker includes retrieval + rerank boost
+    text_sim = top_candidate.get("combined_score", top_candidate.get("final_score", 0.0))
     reranker_score = top_candidate.get("reranker_score", 0.0)
     
     # Symptoms from metadata (comma separated string usually)

@@ -16,7 +16,7 @@ class RerankerService:
         s_min = scores.min()
         s_max = scores.max()
         if s_max == s_min:
-            return np.zeros_like(scores)
+            return np.ones_like(scores) if s_max > -10 else np.zeros_like(scores)
         return (scores - s_min) / (s_max - s_min)
 
     def rerank_disease_candidates(

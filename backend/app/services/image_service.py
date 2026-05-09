@@ -12,25 +12,6 @@ from app.config import get_settings
 
 settings = get_settings()
 
-def check_image_quality(image_path_or_file) -> dict:
-    """Checks image quality (size and variance) without needing CLIP/LLM models"""
-    try:
-        from PIL import Image
-        with Image.open(image_path_or_file) as img:
-            # Check size
-            width, height = img.size
-            if width < 64 or height < 64:
-                return {"valid": False, "reason": f"Image size too small ({width}x{height})"}
-            
-            # Check variance (avoid black/white images)
-            img_np = np.array(img.convert("L"))
-            std = np.std(img_np)
-            if std < 10:
-                return {"valid": False, "reason": f"Image lacks detail (low variance: {std:.2f})"}
-            
-            return {"valid": True, "reason": "OK"}
-    except Exception as e:
-        return {"valid": False, "reason": f"File error: {str(e)}"}
 
 class ImageService:
     def __init__(self):
@@ -54,6 +35,26 @@ class ImageService:
         print(f"ImageService loaded on {self.device}")
         if self.api_keys:
             print(f"Gemini Rotation enabled with {len(self.api_keys)} keys.")
+
+    def check_image_quality(self, image_path_or_file) -> dict:
+        """Checks image quality (size and variance) without needing CLIP/LLM models"""
+        try:
+            from PIL import Image
+            with Image.open(image_path_or_file) as img:
+                # Check size
+                width, height = img.size
+                if width < 64 or height < 64:
+                    return {"valid": False, "reason": f"Image size too small ({width}x{height})"}
+                
+                # Check variance (avoid black/white images)
+                img_np = np.array(img.convert("L"))
+                std = np.std(img_np)
+                if std < 10:
+                    return {"valid": False, "reason": f"Image lacks detail (low variance: {std:.2f})"}
+                
+                return {"valid": True, "reason": "OK"}
+        except Exception as e:
+            return {"valid": False, "reason": f"File error: {str(e)}"}
 
     def _configure_gemini(self):
         if not self.api_keys:

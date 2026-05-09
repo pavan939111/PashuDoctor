@@ -184,6 +184,7 @@ class ChatResponse(BaseModel):
     updated_confidence: ConfidenceResult | None = None
     follow_up_questions: list[str]
     diagnosis_updated: bool
+    diagnosis: Optional[DiagnosisResult] = None
     success: bool
     model_config = ConfigDict()
 

@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from sqlalchemy import select, func, update
 
 from app.models.schemas import HistoryResponse, CaseHistoryItem, FeedbackRequest, FollowUpUpdate
-from app.dependencies import get_memory, get_llm, get_chroma, get_image_service, get_reranker, get_db, get_text_service
+from app.dependencies import get_memory, get_llm, get_chroma, get_image_service, get_reranker, get_db, get_text_service, get_audit_logger
 from app.models.case import Case
 
 router = APIRouter()
@@ -238,4 +238,17 @@ async def update_follow_up(
         return result
     except Exception as e:
         print(f"Error updating follow-up: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/guardrails/audit")
+async def get_guardrail_audit(
+    audit_logger=Depends(get_audit_logger)
+):
+    try:
+        summary = audit_logger.get_audit_summary()
+        return {
+            "success": True,
+            "audit": summary
+        }
+    except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

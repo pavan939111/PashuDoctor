@@ -388,7 +388,7 @@ class HybridRetrievalEngine:
         s_min = min(scores)
         s_max = max(scores)
         if s_max == s_min:
-            return [0.0] * len(scores)
+            return [1.0 if s_max > 0 else 0.0] * len(scores)
         return [(s - s_min) / (s_max - s_min) for s in scores]
 
     def retrieve_disease_candidates(

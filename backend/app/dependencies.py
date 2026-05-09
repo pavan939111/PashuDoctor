@@ -13,9 +13,12 @@ _retrieval = None
 _reranker = None
 _llm_router = None
 _memory = None
+_input_sanitizer = None
+_llm_validator = None
+_audit_logger = None
 
 async def initialise_services():
-    global _image_service, _text_service, _chroma, _bm25, _retrieval, _reranker, _llm_router, _memory
+    global _image_service, _text_service, _chroma, _bm25, _retrieval, _reranker, _llm_router, _memory, _input_sanitizer, _llm_validator, _audit_logger
     
     print("\n--- Initializing PashuDoctor Services ---")
     
@@ -25,6 +28,7 @@ async def initialise_services():
     from app.services.reranker_service import RerankerService
     from app.services.llm_service import LLMRouter
     from app.services.memory_service import MemoryService
+    from app.utils.guardrails import InputSanitizer, LLMOutputValidator, GuardrailAuditLogger
 
     # 1. Image Service
     _image_service = ImageService()
@@ -58,6 +62,12 @@ async def initialise_services():
     _memory = MemoryService(async_session, _chroma)
     print("[OK] MemoryService ready (SQLite + Chroma)")
     
+    # 9. Guardrail Services
+    _input_sanitizer = InputSanitizer()
+    _llm_validator = LLMOutputValidator()
+    _audit_logger = GuardrailAuditLogger()
+    print("[OK] AI Guardrails active")
+    
     print("--- All Services Operational ---\n")
 
 # Dependency Getters
@@ -69,6 +79,9 @@ def get_retrieval(): return _retrieval
 def get_reranker(): return _reranker
 def get_llm(): return _llm_router
 def get_memory(): return _memory
+def get_input_sanitizer(): return _input_sanitizer
+def get_llm_validator(): return _llm_validator
+def get_audit_logger(): return _audit_logger
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
     async with async_session() as session:

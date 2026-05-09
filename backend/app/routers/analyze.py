@@ -5,14 +5,16 @@ import uuid
 import os
 import shutil
 import json
-from typing import Optional
+from typing import Optional, List
+from datetime import datetime
 
 from app.models.schemas import (
     AnalyzeRequest, AnalyzeResponse, DiagnosisResult, 
     AnimalDetectionResult, ConfidenceResult, DiseaseCandidate
 )
 from app.dependencies import (
-    get_image_service, get_retrieval, get_reranker, get_llm, get_memory, get_text_service
+    get_image_service, get_retrieval, get_reranker, get_llm, get_memory, get_text_service,
+    get_input_sanitizer, get_llm_validator, get_audit_logger
 )
 from app.utils.confidence import (
     compute_confidence, route_by_confidence, extract_scores_from_retrieval, 
@@ -23,6 +25,9 @@ from app.utils.herd_alert import check_herd_alert
 from app.utils.breed_intelligence import get_breed_confidence_boost, get_breed_context
 from app.utils.connectivity import is_online
 from app.limiter import limiter
+
+import logging
+logger = logging.getLogger("pashudoctor")
 
 router = APIRouter()
 question_generator = FollowUpQuestionGenerator()
@@ -99,15 +104,26 @@ def get_immediate_emergency_response(user_id: str, animal: str = "animal"):
         success=True
     )
 
-def get_error_response(message: str, status_code: int = 500):
-    return {
-        "success": False,
-        "error": message,
-        "case_id": None
-    }
+def get_error_response(message: str):
+    return AnalyzeResponse(
+        case_id="error",
+        animal_detection=AnimalDetectionResult(animal="unknown", confidence=0.0, method="error"),
+        confidence=ConfidenceResult(
+            score=0.0, percentage=0, action="error", 
+            message=message, show_prediction=False
+        ),
+        diagnosis=None,
+        follow_up_questions=[],
+        top_candidates=[],
+        retrieval_time_ms=0.0,
+        llm_time_ms=0.0,
+        model_used="error",
+        success=False,
+        error=message
+    )
 
 @router.post("/image", response_model=AnalyzeResponse)
-@limiter.limit("5/minute")
+@limiter.limit("10/minute")
 async def analyze_image(
     request: Request,
     user_id: str = Form(...),
@@ -119,7 +135,10 @@ async def analyze_image(
     retrieval=Depends(get_retrieval),
     reranker=Depends(get_reranker),
     llm_router=Depends(get_llm),
-    memory=Depends(get_memory)
+    memory=Depends(get_memory),
+    input_sanitizer=Depends(get_input_sanitizer),
+    llm_validator=Depends(get_llm_validator),
+    audit_logger=Depends(get_audit_logger)
 ):
     start_time = time.time()
     temp_paths = []
@@ -128,6 +147,21 @@ async def analyze_image(
         # 0. Emergency Fast Path
         if check_emergency(symptom_text):
             return get_immediate_emergency_response(user_id, animal_type or "animal")
+
+        # 0.5 Sanitize Text
+        sanitized = input_sanitizer.sanitize_text(symptom_text)
+        if not sanitized["is_safe"]:
+            if sanitized["injection_detected"]:
+                audit_logger.log_event("injection_attempt", None, sanitized, blocked=True)
+                raise HTTPException(status_code=400, detail="Invalid characters in symptom description")
+            if sanitized["human_query_detected"]:
+                audit_logger.log_event("human_query_attempt", None, sanitized, blocked=True)
+                return {
+                    "success": False,
+                    "error": "human_medical_query",
+                    "message": "PashuDoctor can only help with livestock animal health. For human medical help please contact a doctor."
+                }
+        symptom_text = sanitized["sanitized_text"]
 
         # 1. Validation and Saving
         if len(images) > 3:
@@ -138,8 +172,15 @@ async def analyze_image(
                 raise HTTPException(status_code=415, detail=f"Unsupported format for {image.filename}")
             
             contents = await image.read()
-            if len(contents) > MAX_IMAGE_SIZE:
-                raise HTTPException(status_code=413, detail=f"Image {image.filename} too large.")
+            # 1.1 Image Validation
+            validation = input_sanitizer.validate_image_file(
+                file_size_bytes=len(contents),
+                content_type=image.content_type,
+                filename=image.filename
+            )
+            if not validation["is_valid"]:
+                audit_logger.log_event("invalid_file", None, validation, blocked=True)
+                raise HTTPException(status_code=400, detail=validation["errors"])
             
             filename = f"{uuid.uuid4()}_{image.filename}"
             path = os.path.join(UPLOAD_DIR, filename)
@@ -151,6 +192,16 @@ async def analyze_image(
             quality = image_service.check_image_quality(path)
             if not quality["valid"]:
                 raise HTTPException(status_code=400, detail=f"Invalid image {image.filename}: {quality['reason']}")
+
+            # 1.2 Animal Relevance Check
+            animal_check = input_sanitizer.check_animal_relevance(path, image_service)
+            if not animal_check["is_animal"]:
+                audit_logger.log_event("non_animal_image", None, animal_check, blocked=True)
+                raise HTTPException(status_code=400, detail={
+                    "error": "non_animal_image",
+                    "message": animal_check["reason"],
+                    "suggestion": "Please upload a clear photo of your livestock animal"
+                })
 
         if not temp_paths:
             raise HTTPException(status_code=400, detail="No valid images uploaded.")
@@ -201,6 +252,11 @@ async def analyze_image(
             provided_symptoms=[s.strip() for s in symptom_text.replace(",", " ").split()]
         )
         confidence = compute_confidence(**scores)
+        
+        # LOGGING FOR DEBUGGING
+        logger.info(f"Retrieval Scores: {scores}")
+        logger.info(f"Final Confidence: {confidence['score']} (Action: {route_by_confidence(confidence)['action']})")
+        
         routing = route_by_confidence(confidence)
         
         # 8. Follow-up or Diagnosis
@@ -228,44 +284,33 @@ async def analyze_image(
             )
             
             if is_online():
-                llm_res = await anyio.to_thread.run_sync(
-                    llm_router.generate,
+                diag_data = await anyio.to_thread.run_sync(
+                    llm_validator.validate_with_retry,
                     prompt,
+                    llm_router,
                     SYSTEM_PROMPT,
-                    {},
                     temp_paths,
-                    None
+                    3
                 )
-
-                # Caching
-                if llm_res.get("success"):
-                    cache_key = f"{detected_animal}_{symptom_text[:50]}"
-                    DIAGNOSIS_CACHE[cache_key] = llm_res
-                    if len(DIAGNOSIS_CACHE) > CACHE_LIMIT:
-                        # Remove oldest (simplified)
-                        first_key = next(iter(DIAGNOSIS_CACHE))
-                        del DIAGNOSIS_CACHE[first_key]
+                model_used = "gemini-1.5-flash" # validate_with_retry uses gemini
+                
+                # Cache the validated data
+                cache_key = f"{detected_animal}_{symptom_text[:50]}"
+                DIAGNOSIS_CACHE[cache_key] = {"success": True, "text": json.dumps(diag_data), "routed_to": model_used}
             else:
                 # Offline Cache Lookup
                 cache_key = f"{detected_animal}_{symptom_text[:50]}"
                 if cache_key in DIAGNOSIS_CACHE:
                     llm_res = DIAGNOSIS_CACHE[cache_key]
+                    diag_data = json.loads(llm_res["text"])
+                    model_used = llm_res.get("routed_to", "unknown")
                 else:
                     return get_error_response("Offline mode: No cached diagnosis for these symptoms. Please connect to internet.", 503)
 
             llm_time = (time.time() - llm_start) * 1000
-            model_used = llm_res.get("routed_to", "unknown")
             
-            if llm_res["success"]:
+            if diag_data:
                 try:
-                    # Parse JSON from LLM
-                    text = llm_res["text"].strip()
-                    if "```json" in text:
-                        text = text.split("```json")[1].split("```")[0].strip()
-                    elif "```" in text:
-                        text = text.split("```")[1].split("```")[0].strip()
-                    
-                    diag_data = json.loads(text)
                     formatted = format_response_for_farmer(diag_data, language)
                     
                     # Similar cases info
@@ -294,8 +339,8 @@ async def analyze_image(
                             "within_week": "moderate",
                             "monitor": "mild"
                         }.get(diag_data.get("vet_urgency", "monitor"), "moderate"),
-                        herd_alert=check_herd_alert(primary_name, language if 'language' in locals() else request_body.language),
-                        breed=request_body.breed if 'request_body' in locals() else "Unknown",
+                        herd_alert=check_herd_alert(primary_name, language),
+                        breed=animal_type or "Unknown",
                         timeline=[{
                             "day": 1,
                             "event": "Initial Diagnosis",
@@ -373,6 +418,7 @@ async def analyze_image(
         return get_error_response(str(e))
 
 @router.post("/text-only", response_model=AnalyzeResponse)
+@limiter.limit("10/minute")
 async def analyze_text(
     request: Request,
     request_body: AnalyzeRequest,
@@ -380,7 +426,10 @@ async def analyze_text(
     retrieval=Depends(get_retrieval),
     reranker=Depends(get_reranker),
     llm_router=Depends(get_llm),
-    memory=Depends(get_memory)
+    memory=Depends(get_memory),
+    input_sanitizer=Depends(get_input_sanitizer),
+    llm_validator=Depends(get_llm_validator),
+    audit_logger=Depends(get_audit_logger)
 ):
     start_time = time.time()
     
@@ -388,6 +437,21 @@ async def analyze_text(
         # 0. Emergency Fast Path
         if check_emergency(request_body.symptom_text):
             return get_immediate_emergency_response(request_body.user_id, request_body.animal_type or "animal")
+
+        # 0.5 Sanitize Text
+        sanitized = input_sanitizer.sanitize_text(request_body.symptom_text)
+        if not sanitized["is_safe"]:
+            if sanitized["injection_detected"]:
+                audit_logger.log_event("injection_attempt", None, sanitized, blocked=True)
+                raise HTTPException(status_code=400, detail="Invalid characters in symptom description")
+            if sanitized["human_query_detected"]:
+                audit_logger.log_event("human_query_attempt", None, sanitized, blocked=True)
+                return {
+                    "success": False,
+                    "error": "human_medical_query",
+                    "message": "PashuDoctor can only help with livestock animal health. For human medical help please contact a doctor."
+                }
+        request_body.symptom_text = sanitized["sanitized_text"]
 
         # 1. Text-only Retrieval
         retrieval_start = time.time()
@@ -459,42 +523,32 @@ async def analyze_text(
             )
             
             if is_online():
-                llm_res = await anyio.to_thread.run_sync(
-                    llm_router.generate,
+                diag_data = await anyio.to_thread.run_sync(
+                    llm_validator.validate_with_retry,
                     prompt,
+                    llm_router,
                     SYSTEM_PROMPT,
-                    {
-                        "confidence_score": confidence["score"],
-                        "needs_image_analysis": False
-                    }
+                    None,
+                    3
                 )
+                model_used = "gemini-1.5-flash"
                 
                 # Caching
-                if llm_res.get("success"):
-                    cache_key = f"{request_body.animal_type}_{request_body.symptom_text[:50]}"
-                    DIAGNOSIS_CACHE[cache_key] = llm_res
-                    if len(DIAGNOSIS_CACHE) > CACHE_LIMIT:
-                        first_key = next(iter(DIAGNOSIS_CACHE))
-                        del DIAGNOSIS_CACHE[first_key]
+                cache_key = f"{request_body.animal_type}_{request_body.symptom_text[:50]}"
+                DIAGNOSIS_CACHE[cache_key] = {"success": True, "text": json.dumps(diag_data), "routed_to": model_used}
             else:
                 # Offline Cache Lookup
                 cache_key = f"{request_body.animal_type}_{request_body.symptom_text[:50]}"
                 if cache_key in DIAGNOSIS_CACHE:
                     llm_res = DIAGNOSIS_CACHE[cache_key]
+                    diag_data = json.loads(llm_res["text"])
+                    model_used = llm_res.get("routed_to", "unknown")
                 else:
                     return get_error_response("Offline mode: No cached diagnosis for these symptoms. Please connect to internet.", 503)
             llm_time = (time.time() - llm_start) * 1000
-            model_used = llm_res.get("routed_to", "unknown")
             
-            if llm_res["success"]:
+            if diag_data:
                 try:
-                    text = llm_res["text"].strip()
-                    if "```json" in text:
-                        text = text.split("```json")[1].split("```")[0].strip()
-                    elif "```" in text:
-                        text = text.split("```")[1].split("```")[0].strip()
-                    
-                    diag_data = json.loads(text)
                     formatted = format_response_for_farmer(diag_data, request_body.language)
                     
                     # Similar cases info
@@ -601,7 +655,7 @@ async def analyze_text(
         )
 
     except Exception as e:
-        print(f"Error in analyze_text: {e}")
+        logger.error(f"Error in analyze_image: {e}", exc_info=True)
         return get_error_response(str(e))
 
 @router.get("/{case_id}")
