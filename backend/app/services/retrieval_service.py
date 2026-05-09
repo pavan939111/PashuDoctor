@@ -102,6 +102,31 @@ class ChromaDBManager:
                 })
         return formatted
 
+    def query_verified_cases(
+        self,
+        query_embedding: np.ndarray,
+        animal_type: str,
+        n_results: int = 10
+    ) -> List[Dict[str, Any]]:
+        """Queries the verified cases collection populated by farmer feedback"""
+        emb_list = query_embedding.tolist() if isinstance(query_embedding, np.ndarray) else list(query_embedding)
+        
+        results = self.cases_collection.query(
+            query_embeddings=[emb_list],
+            n_results=n_results,
+            where={"animal": animal_type}
+        )
+        
+        formatted = []
+        if results["ids"] and results["ids"][0]:
+            for i in range(len(results["ids"][0])):
+                formatted.append({
+                    "id": results["ids"][0][i],
+                    "distance": results["distances"][0][i] if results["distances"] else 0,
+                    "metadata": results["metadatas"][0][i]
+                })
+        return formatted
+
     def query_knowledge(
         self,
         query_embedding: np.ndarray,
@@ -377,10 +402,20 @@ class HybridRetrievalEngine:
         # 1. Dense Retrieval (Similarity = 1 - Distance)
         dense_results = self.chroma.query_diseases(image_embedding, animal_type, n_results=top_k * 2)
         
-        # 2. BM25 Retrieval
+        # 2. Verified Case Retrieval (Learning Loop)
+        # We use symptom embedding for dense lookup of historical cases if available
+        # Note: image_embedding here is CLIP, but cases_collection might use text embeddings
+        # For the loop to work, we should use the appropriate embedding.
+        # However, retrieve_all currently passes image_embedding (CLIP) to this method.
+        # If cases were stored with symptom embeddings, we should query with symptom_emb.
+        
+        # Let's check verified cases as well
+        verified_results = self.chroma.query_verified_cases(image_embedding, animal_type, n_results=top_k)
+
+        # 3. BM25 Retrieval
         bm25_results = self.bm25.search_symptom_bm25(symptom_text, animal_type=animal_type, top_k=top_k * 2)
         
-        # 3. Score Fusion
+        # 4. Score Fusion
         candidates = {}
         
         for res in dense_results:
@@ -399,6 +434,19 @@ class HybridRetrievalEngine:
                 candidates[idx] = {
                     "dense_score": 0.0,
                     "bm25_score": res["bm25_score"],
+                    "metadata": res["metadata"]
+                }
+
+        for res in verified_results:
+            idx = res["id"]
+            if idx in candidates:
+                # Boost existing candidate if it also appears in verified cases
+                candidates[idx]["dense_score"] = max(candidates[idx]["dense_score"], 1.0 - res["distance"])
+                candidates[idx]["metadata"]["source"] = "verified_case" # Mark as high-trust
+            else:
+                candidates[idx] = {
+                    "dense_score": 1.0 - res["distance"],
+                    "bm25_score": 0.0,
                     "metadata": res["metadata"]
                 }
                 
@@ -487,22 +535,29 @@ class HybridRetrievalEngine:
 
     def retrieve_all(
         self,
-        image_path: str,
+        image_path: str | List[str],
         symptom_text: str,
         animal_type: str = None
     ) -> Dict[str, Any]:
         
         start_time = time.time()
         
-        # a. Animal Detection
+        # a. Animal Detection & Embedding
         animal_conf = 1.0
-        if not animal_type:
-            detection = self.image_service.detect_animal(image_path)
-            animal_type = detection["animal"]
-            animal_conf = detection["confidence"]
-            
-        # b. Image Embedding
-        image_emb = self.image_service.get_image_embedding(image_path)
+        
+        if isinstance(image_path, list):
+            # Use first image for detection, combined for embedding
+            if not animal_type and image_path:
+                detection = self.image_service.detect_animal(image_path[0])
+                animal_type = detection["animal"]
+                animal_conf = detection["confidence"]
+            image_emb = self.image_service.get_combined_embedding(image_path)
+        else:
+            if not animal_type:
+                detection = self.image_service.detect_animal(image_path)
+                animal_type = detection["animal"]
+                animal_conf = detection["confidence"]
+            image_emb = self.image_service.get_image_embedding(image_path)
         
         # c. Text Embedding
         text_emb_384 = self.text_service.get_text_embedding(symptom_text)

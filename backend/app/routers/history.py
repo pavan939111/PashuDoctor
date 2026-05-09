@@ -5,8 +5,8 @@ import csv
 from datetime import datetime, timedelta
 from sqlalchemy import select, func, update
 
-from app.models.schemas import HistoryResponse, CaseHistoryItem, FeedbackRequest
-from app.dependencies import get_memory, get_llm, get_chroma, get_image_service, get_reranker, get_db
+from app.models.schemas import HistoryResponse, CaseHistoryItem, FeedbackRequest, FollowUpUpdate
+from app.dependencies import get_memory, get_llm, get_chroma, get_image_service, get_reranker, get_db, get_text_service
 from app.models.case import Case
 
 router = APIRouter()
@@ -192,21 +192,25 @@ async def delete_case(
 async def save_feedback(
     request: FeedbackRequest,
     memory=Depends(get_memory),
-    image_service=Depends(get_image_service)
+    image_service=Depends(get_image_service),
+    text_service=Depends(get_text_service)
 ):
     try:
         await memory.save_feedback(request.case_id, request.feedback_correct, request.farmer_note)
         
         if request.feedback_correct:
-            context = await memory.get_session_context(request.case_id)
-            if context and context["case"].get("image_path"):
-                emb = image_service.get_image_embedding(context["case"]["image_path"])
-                memory.store_case_vector(
-                    request.case_id, 
-                    emb, 
+            # Rebuild case embedding from stored symptoms + image
+            case = await memory.get_case(request.case_id)
+            if case:
+                # We use text embedding of symptoms as the primary vector for historical case matching
+                symptom_emb = text_service.get_text_embedding(case.get("symptoms_text", ""))
+                await memory.store_case_vector(
+                    request.case_id,
+                    symptom_emb,
                     {
-                        "disease": context["case"]["primary_diagnosis"],
-                        "animal": context["case"]["animal_type"],
+                        "animal": case.get("animal_type"),
+                        "disease": case.get("primary_diagnosis"),
+                        "verified": "true",
                         "source": "farmer_feedback"
                     }
                 )
@@ -223,4 +227,15 @@ async def save_feedback(
         return {"success": True, "message": "Thank you for feedback"}
     except Exception as e:
         print(f"Error saving feedback: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+@router.post("/follow-up")
+async def update_follow_up(
+    request: FollowUpUpdate,
+    memory=Depends(get_memory)
+):
+    try:
+        result = await memory.update_follow_up(request.case_id, request.status, request.note)
+        return result
+    except Exception as e:
+        print(f"Error updating follow-up: {e}")
         raise HTTPException(status_code=500, detail=str(e))

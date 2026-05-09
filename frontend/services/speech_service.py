@@ -5,6 +5,8 @@ import logging
 from typing import Optional
 from streamlit_mic_recorder import mic_recorder
 from services.language_service import LanguageService
+from utils.connectivity import is_online
+import anyio
 
 class SpeechService:
     def __init__(self):
@@ -13,6 +15,7 @@ class SpeechService:
         self.recognizer.dynamic_energy_threshold = True
         self.recognizer.pause_threshold = 0.8
         self.logger = logging.getLogger("pashudoctor.frontend.speech_service")
+        self._whisper_model = None # Lazy load
 
     def record_from_microphone(
         self,
@@ -33,17 +36,22 @@ class SpeechService:
                     phrase_time_limit=duration
                 )
 
-            self.logger.info("Transcribing audio...")
-            text = self.recognizer.recognize_google(
-                audio,
-                language=language_code
-            )
+            if is_online():
+                text = self.recognizer.recognize_google(
+                    audio,
+                    language=language_code
+                )
+                method = "google_sr"
+            else:
+                self.logger.info("Offline mode: Using Whisper fallback...")
+                text = await self._whisper_transcribe(audio)
+                method = "whisper_local"
             
             return {
                 "text": text,
                 "language": language_code,
                 "success": True,
-                "method": "google_sr"
+                "method": method
             }
 
         except sr.UnknownValueError:
@@ -69,16 +77,22 @@ class SpeechService:
             with sr.AudioFile(audio_file_path) as source:
                 audio = self.recognizer.record(source)
             
-            text = self.recognizer.recognize_google(
-                audio,
-                language=language_code
-            )
+            if is_online():
+                text = self.recognizer.recognize_google(
+                    audio,
+                    language=language_code
+                )
+                method = "google_sr_file"
+            else:
+                self.logger.info("Offline mode: Using Whisper fallback...")
+                text = await self._whisper_transcribe(audio)
+                method = "whisper_local_file"
             
             return {
                 "text": text,
                 "language": language_code,
                 "success": True,
-                "method": "google_sr_file"
+                "method": method
             }
 
         except sr.UnknownValueError:
@@ -202,3 +216,26 @@ class SpeechService:
                     os.remove(tmp_path)
         
         return None
+
+    async def _whisper_transcribe(self, audio_data: sr.AudioData) -> str:
+        """Helper to use Whisper for local transcription"""
+        try:
+            import whisper
+            if self._whisper_model is None:
+                self.logger.info("Loading Whisper 'small' model...")
+                self._whisper_model = whisper.load_model("small")
+            
+            # Write audio to temp file for Whisper
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
+                tmp.write(audio_data.get_wav_data())
+                tmp_path = tmp.name
+            
+            try:
+                result = self._whisper_model.transcribe(tmp_path)
+                return result.get("text", "").strip()
+            finally:
+                if os.path.exists(tmp_path):
+                    os.remove(tmp_path)
+        except Exception as e:
+            self.logger.error(f"Whisper fallback error: {e}")
+            return "[Whisper Error: Could not transcribe offline]"

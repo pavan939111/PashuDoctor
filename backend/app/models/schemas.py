@@ -10,6 +10,7 @@ class AnalyzeRequest(BaseModel):
     animal_type: str | None = None
     case_id: str | None = None
     language: str = "english"
+    breed: str = "Unknown"
 
     @field_validator("animal_type")
     @classmethod
@@ -60,6 +61,12 @@ class FollowUpRequest(BaseModel):
     symptom_text: str = Field(..., min_length=3, max_length=1000)
     model_config = ConfigDict()
 
+class FollowUpUpdate(BaseModel):
+    case_id: str
+    status: str # better/same/worse
+    note: str = ""
+    model_config = ConfigDict()
+
 # 2. Response Models
 
 class AnimalDetectionResult(BaseModel):
@@ -97,6 +104,7 @@ class DiagnosisResult(BaseModel):
     knowledge_confidence: float = 0.0
     similar_cases_count: int = 0
     similar_cases_type: str = "" # "mastitis cases in cows"
+    timeline: list[dict] = []
     
     immediate_precautions: list[str]
     urgent_warning_signs: list[str]
@@ -104,6 +112,8 @@ class DiagnosisResult(BaseModel):
     farmer_advice: str
     vet_urgency: str
     severity: str
+    herd_alert: Optional[dict] = None
+    breed: Optional[str] = None
     formatted_response: str
     model_config = ConfigDict()
 

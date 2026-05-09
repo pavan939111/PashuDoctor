@@ -38,7 +38,13 @@ class MemoryService:
                 vet_urgency=case_data.get("vet_urgency", "monitor"),
                 immediate_precautions=case_data.get("immediate_precautions", []),
                 llm_model_used=case_data.get("llm_model_used", "unknown"),
-                retrieval_time_ms=case_data.get("retrieval_time_ms", 0.0)
+                retrieval_time_ms=case_data.get("retrieval_time_ms", 0.0),
+                timeline=[{
+                    "day": 1,
+                    "event": "Initial Diagnosis",
+                    "note": f"{case_data.get('primary_diagnosis')} suspected ({int(case_data.get('confidence_score', 0)*100)}%)",
+                    "timestamp": datetime.now().isoformat()
+                }]
             )
             session.add(new_case)
             await session.commit()
@@ -109,7 +115,7 @@ class MemoryService:
             await session.execute(stmt)
             await session.commit()
 
-    def store_case_vector(
+    async def store_case_vector(
         self,
         case_id: str,
         case_embedding: np.ndarray,
@@ -120,12 +126,13 @@ class MemoryService:
         """
         emb_list = case_embedding.tolist() if isinstance(case_embedding, np.ndarray) else list(case_embedding)
         
+        # This must actually call:
         self.chroma.cases_collection.add(
-            ids=[case_id],
             embeddings=[emb_list],
-            metadatas=[case_metadata]
+            metadatas=[case_metadata],
+            ids=[f"verified_{case_id}"]
         )
-        print(f"Case {case_id} vectorized and stored in memory.")
+        print(f"Verified case {case_id} added to vector store")
 
     async def get_case(self, case_id: str) -> Dict[str, Any]:
         async with self.session_factory() as session:
@@ -137,6 +144,7 @@ class MemoryService:
                 "id": case_obj.id,
                 "user_id": case_obj.user_id,
                 "animal_type": case_obj.animal_type,
+                "symptoms_text": case_obj.symptoms_text,
                 "primary_diagnosis": case_obj.primary_diagnosis,
                 "feedback_correct": case_obj.feedback_correct
             }
@@ -198,5 +206,49 @@ class MemoryService:
                 "chat_history": chat_history,
                 "answered_questions": answered,
                 "current_diagnosis": diagnosis_dict,
-                "current_confidence": confidence_dict
+                "current_confidence": confidence_dict,
+                "timeline": case_obj.timeline or []
             }
+
+    async def update_follow_up(self, case_id: str, status: str, note: str) -> Dict[str, Any]:
+        async with self.session_factory() as session:
+            stmt = select(Case).where(Case.id == case_id)
+            result = await session.execute(stmt)
+            case_obj = result.scalar_one_or_none()
+            
+            if not case_obj:
+                return {"success": False, "error": "Case not found"}
+            
+            current_timeline = list(case_obj.timeline) if case_obj.timeline else []
+            next_day = len(current_timeline) + 1
+            
+            event = {
+                "day": next_day,
+                "event": f"Day {next_day} Follow-up",
+                "note": note or f"Farmer reported: {status.capitalize()}",
+                "status": status,
+                "timestamp": datetime.now().isoformat()
+            }
+            current_timeline.append(event)
+            
+            updates = {
+                "follow_up_status": status,
+                "timeline": current_timeline
+            }
+            
+            if status == "worse":
+                updates["vet_urgency"] = "immediate"
+            elif status == "better" and next_day >= 3:
+                updates["is_closed"] = True
+                current_timeline.append({
+                    "day": next_day,
+                    "event": "Case Closed",
+                    "note": "Recovery noted by farmer.",
+                    "timestamp": datetime.now().isoformat()
+                })
+            
+            stmt_update = update(Case).where(Case.id == case_id).values(**updates)
+            await session.execute(stmt_update)
+            await session.commit()
+            
+            return {"success": True, "timeline": current_timeline, "urgency": updates.get("vet_urgency")}

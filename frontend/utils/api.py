@@ -45,3 +45,15 @@ def api_delete(endpoint):
                 return {"success": False, "error": f"API Error ({resp.status_code}): {resp.text}"}
     except Exception as e:
         return {"success": False, "error": f"Cannot connect to PashuDoctor API: {str(e)}"}
+
+def api_post_multi_files(endpoint, data=None, files=None):
+    """Helper for POST requests with multiple files (same key)"""
+    try:
+        with httpx.Client(timeout=60.0) as client:
+            resp = client.post(f"{API_BASE}{endpoint}", data=data, files=files)
+            if resp.status_code == 200:
+                return resp.json()
+            else:
+                return {"success": False, "error": f"API Error ({resp.status_code}): {resp.text}"}
+    except Exception as e:
+        return {"success": False, "error": f"Cannot connect to PashuDoctor API: {str(e)}"}

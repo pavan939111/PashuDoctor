@@ -9,6 +9,8 @@ from components.multilingual_input import (
 )
 from services.language_service import LanguageService
 from services.speech_service import SpeechService
+from services.image_service import check_image_quality
+from utils.breed_intelligence import get_supported_breeds
 
 def show_home_page():
     lang_service = st.session_state.lang_service
@@ -36,25 +38,44 @@ def show_home_page():
     with col1:
         st.subheader(f"📝 {ui['describe_symptoms']}")
         
-        # a. Image upload
-        uploaded_file = st.file_uploader(
-            ui["upload_photo"],
+        # a. Image upload (Multi-image support)
+        uploaded_files = st.file_uploader(
+            ui.get("upload_photo", "Upload 1-3 photos of the animal"),
             type=["jpg", "jpeg", "png", "webp"],
-            help="Upload a clear photo of the sick animal"
+            accept_multiple_files=True,
+            help="Upload from different angles for better accuracy"
         )
         
-        if uploaded_file:
-            st.image(uploaded_file, width=300)
-            # Simple quality indicator
-            st.markdown('<p style="color: #2E7D32;">✅ Image ready for analysis</p>', unsafe_allow_html=True)
+        if uploaded_files:
+            uploaded_files = uploaded_files[:3] # Cap at 3
+            cols = st.columns(len(uploaded_files))
+            for i, (col, img) in enumerate(zip(cols, uploaded_files)):
+                col.image(img, caption=f"Photo {i+1}", width=200)
+                quality = check_image_quality(img)
+                if quality["valid"]:
+                    col.success("Good quality")
+                else:
+                    col.warning(f"Low quality: {quality['reason']}")
 
-        # b. Animal type selector
+        # b. Location Details
+        loc_col1, loc_col2 = st.columns(2)
+        with loc_col1:
+            state = st.selectbox(
+                "State",
+                options=["Other", "Telangana", "Andhra Pradesh", "Maharashtra", "Punjab", "Gujarat", "Rajasthan", "Karnataka", "Tamil Nadu", "Uttar Pradesh", "West Bengal"],
+                index=0,
+                key="user_state"
+            )
+        with loc_col2:
+            district = st.text_input("District", placeholder="Enter district", key="user_district")
+
+        # c. Animal type selector
         animal_type = st.selectbox(
             "Animal type (optional — auto-detected from image)",
             ["Auto-detect", "Cow", "Buffalo", "Goat", "Sheep"]
         )
 
-        # c. Symptom input (Combined Speech + Text)
+        # d. Symptom input (Combined Speech + Text)
         symptom_text = render_speech_text_input(
             label=ui["describe_symptoms"],
             key="symptom_input",
@@ -77,6 +98,14 @@ def show_home_page():
             trans_res = lang_service.translate_to_english(raw_symptoms, language)
             final_symptoms = trans_res["translated"]
 
+        # Breed Selector
+        breed = st.selectbox(
+            lang_service.translate_from_english("Breed (optional)", language),
+            options=get_supported_breeds(),
+            index=0,
+            key="breed_selector"
+        )
+        
         # f. Analyze button
         if st.button(f"🔍 {ui['analyze_button']}", type="primary", use_container_width=True):
             # 4. Analysis pipeline
@@ -86,20 +115,24 @@ def show_home_page():
                 with st.spinner("PashuDoctor is analyzing..."):
                     req_animal = None if animal_type == "Auto-detect" else animal_type.lower()
                     
-                    if uploaded_file:
-                        files = {"image": (uploaded_file.name, uploaded_file.getvalue(), uploaded_file.type)}
+                    if uploaded_files:
+                        files = [("images", (f.name, f.getvalue(), f.type)) for f in uploaded_files]
                         data = {
                             "user_id": st.session_state.user_id,
                             "symptom_text": final_symptoms,
                             "animal_type": req_animal,
+                            "breed": breed,
                             "language": language.lower()
                         }
-                        response = api_post("/analyze/image", data=data, files=files)
+                        # We need to update api_post to handle list of files or just use httpx directly
+                        from utils.api import api_post_multi_files
+                        response = api_post_multi_files("/analyze/image", data=data, files=files)
                     else:
                         json_payload = {
                             "user_id": st.session_state.user_id,
                             "symptom_text": final_symptoms,
                             "animal_type": req_animal,
+                            "breed": breed,
                             "language": language.lower()
                         }
                         response = api_post("/analyze/text-only", json_payload=json_payload)
@@ -110,6 +143,8 @@ def show_home_page():
                         st.session_state.current_confidence = response.get("confidence")
                         st.session_state.animal_result = response.get("animal_detection")
                         st.session_state.follow_up_questions = response.get("follow_up_questions", [])
+                        st.session_state.timeline = response.get("diagnosis", {}).get("timeline", []) if response.get("diagnosis") else []
+                        st.session_state.is_closed = False
                         st.session_state.results_visible = True
                         st.rerun()
                     else:
@@ -139,7 +174,23 @@ def show_home_page():
 
             # b. Animal detection result
             if animal_data:
-                st.success(f"🐄 Detected: **{animal_data['animal'].capitalize()}** ({animal_data['confidence']*100:.0f}% match)")
+                from components.ui_components import render_animal_badge, render_severity_badge, show_emergency_alert
+                render_animal_badge(animal_data['animal'], animal_data['confidence'])
+                
+                if diagnosis and diagnosis.get("breed") and diagnosis.get("breed") != "Unknown":
+                    st.markdown(f"🧬 **Breed Context**: {diagnosis.get('breed')}")
+                
+                # Severity Badge
+                if diagnosis:
+                    from components.ui_components import render_herd_alert
+                    render_severity_badge(diagnosis.get("severity", "moderate"))
+                    
+                    # Herd Alert (Contagious Diseases)
+                    if diagnosis.get("herd_alert"):
+                        render_herd_alert(diagnosis.get("herd_alert"))
+                        
+                    if diagnosis.get("severity", "").lower() == "emergency":
+                        show_emergency_alert()
 
             # c. Diagnosis card (Multilingual)
             if diagnosis and confidence.get("show_prediction"):
@@ -164,7 +215,50 @@ def show_home_page():
                 }
                 render_pdf_button(case_data, key_suffix="home")
                 
+                # 24h Reminder
+                st.success(f"🔔 **{lang_service.translate_from_english('Check again in 24 hours', language)}**")
+                
                 st.markdown('</div>', unsafe_allow_html=True)
+                
+                # Timeline View
+                from components.ui_components import render_case_timeline
+                render_case_timeline(st.session_state.get("timeline", []))
+                
+                # Vet Locator
+                from components.vet_locator import render_vet_locator
+                render_vet_locator(
+                    district=district if district else "your area",
+                    state=state,
+                    urgency=diagnosis.get("vet_urgency", "monitor").lower()
+                )
+
+                # Day 2 Follow-up Simulator
+                st.divider()
+                if not st.session_state.get("is_closed"):
+                    st.markdown(f"### 🩺 {lang_service.translate_from_english('Day 2: How is your animal today?', language)}")
+                    c1, c2, c3 = st.columns(3)
+                    with c1:
+                        if st.button("😊 Better", use_container_width=True):
+                            res = api_post("/history/follow-up", json_payload={"case_id": st.session_state.case_id, "status": "better"})
+                            if res.get("success"):
+                                st.session_state.timeline = res["timeline"]
+                                st.toast("Progress noted! Recovery is on track.")
+                                st.rerun()
+                    with c2:
+                        if st.button("😐 Same", use_container_width=True):
+                            res = api_post("/history/follow-up", json_payload={"case_id": st.session_state.case_id, "status": "same"})
+                            if res.get("success"):
+                                st.session_state.timeline = res["timeline"]
+                                st.toast("Keep monitoring and following advice.")
+                                st.rerun()
+                    with c3:
+                        if st.button("😟 Worse", use_container_width=True, type="primary"):
+                            res = api_post("/history/follow-up", json_payload={"case_id": st.session_state.case_id, "status": "worse"})
+                            if res.get("success"):
+                                st.session_state.timeline = res["timeline"]
+                                st.session_state.current_diagnosis["vet_urgency"] = "Immediate"
+                                st.error("⚠️ Condition worsening. Escalating to urgent vet referral.")
+                                st.rerun()
             
             # d. Follow-up questions (Translated)
             if confidence and confidence.get("action") == "ask_more":

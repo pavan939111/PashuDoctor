@@ -3,6 +3,7 @@ from deep_translator import GoogleTranslator
 from langdetect import detect
 from gtts import gTTS
 import logging
+from utils.connectivity import is_online
 
 class LanguageService:
     SUPPORTED_LANGUAGES = {
@@ -20,17 +21,16 @@ class LanguageService:
 
     def __init__(self):
         self.logger = logging.getLogger("pashudoctor.frontend.language_service")
+        self._argos_installed = False # Lazy load argos
 
     def translate_to_english(self, text: str, source_lang: str) -> dict:
         """
         Translates text from source_lang to English.
-        source_lang is the name (e.g. 'Hindi') or the code (e.g. 'hi').
         """
         try:
             if not text or text.strip() == "":
                 return {"original": text, "translated": text, "source_lang": source_lang, "success": True}
 
-            # Map name to code if needed
             lang_code = source_lang
             if source_lang in self.SUPPORTED_LANGUAGES:
                 lang_code = self.SUPPORTED_LANGUAGES[source_lang]["code"]
@@ -38,8 +38,12 @@ class LanguageService:
             if lang_code == "en":
                 return {"original": text, "translated": text, "source_lang": "en", "success": True}
 
-            translator = GoogleTranslator(source=lang_code, target="en")
-            translated = translator.translate(text)
+            if is_online():
+                translator = GoogleTranslator(source=lang_code, target="en")
+                translated = translator.translate(text)
+            else:
+                self.logger.info("Offline mode: Using ArgosTranslate fallback...")
+                translated = self._argos_translate(text, lang_code, "en")
 
             return {
                 "original": text,
@@ -54,7 +58,6 @@ class LanguageService:
     def translate_from_english(self, text: str, target_lang: str) -> str:
         """
         Translates English text to target_lang.
-        target_lang is the name (e.g. 'Hindi') or the code (e.g. 'hi').
         """
         try:
             if not text or text.strip() == "":
@@ -67,11 +70,27 @@ class LanguageService:
             if lang_code == "en":
                 return text
 
-            translator = GoogleTranslator(source="en", target=lang_code)
-            return translator.translate(text)
+            if is_online():
+                translator = GoogleTranslator(source="en", target=lang_code)
+                return translator.translate(text)
+            else:
+                self.logger.info("Offline mode: Using ArgosTranslate fallback...")
+                return self._argos_translate(text, "en", lang_code)
         except Exception as e:
             self.logger.error(f"Translation from English error: {e}")
             return text
+
+    def _argos_translate(self, text: str, from_code: str, to_code: str) -> str:
+        """Helper for offline translation using Argos Translate"""
+        try:
+            import argostranslate.package
+            import argostranslate.translate
+            
+            # Simple check/setup - in production, packages should be pre-installed
+            return argostranslate.translate.translate(text, from_code, to_code)
+        except Exception as e:
+            self.logger.error(f"ArgosTranslate error: {e}")
+            return f"[Offline Translation Error: {text}]"
 
     def detect_language(self, text: str) -> str:
         """
@@ -93,6 +112,10 @@ class LanguageService:
         """
         try:
             if not text or text.strip() == "":
+                return False
+
+            if not is_online():
+                self.logger.warning("Offline mode: gTTS is disabled.")
                 return False
 
             lang_code = "en"

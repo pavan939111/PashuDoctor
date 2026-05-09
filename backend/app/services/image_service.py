@@ -12,6 +12,26 @@ from app.config import get_settings
 
 settings = get_settings()
 
+def check_image_quality(image_path_or_file) -> dict:
+    """Checks image quality (size and variance) without needing CLIP/LLM models"""
+    try:
+        from PIL import Image
+        with Image.open(image_path_or_file) as img:
+            # Check size
+            width, height = img.size
+            if width < 64 or height < 64:
+                return {"valid": False, "reason": f"Image size too small ({width}x{height})"}
+            
+            # Check variance (avoid black/white images)
+            img_np = np.array(img.convert("L"))
+            std = np.std(img_np)
+            if std < 10:
+                return {"valid": False, "reason": f"Image lacks detail (low variance: {std:.2f})"}
+            
+            return {"valid": True, "reason": "OK"}
+    except Exception as e:
+        return {"valid": False, "reason": f"File error: {str(e)}"}
+
 class ImageService:
     def __init__(self):
         # 1. Load CLIP
@@ -65,6 +85,20 @@ class ImageService:
         except Exception as e:
             print(f"Error getting embedding for {image_path}: {e}")
             return np.zeros(512)
+
+    def get_combined_embedding(self, image_paths: list) -> np.ndarray:
+        """Computes a mean normalized embedding from multiple images"""
+        if not image_paths:
+            return np.zeros(512)
+            
+        embeddings = [self.get_image_embedding(p) for p in image_paths]
+        # Mean across embeddings
+        combined = np.mean(embeddings, axis=0)
+        # Re-normalize
+        norm = np.linalg.norm(combined)
+        if norm > 0:
+            combined = combined / norm
+        return combined
 
     @lru_cache(maxsize=128)
     def detect_animal_clip(self, image_path: str) -> dict:
@@ -161,22 +195,4 @@ class ImageService:
             for path in batch:
                 embeddings.append(self.get_image_embedding(path))
         return embeddings
-
-    def check_image_quality(self, image_path: str) -> dict:
-        try:
-            with Image.open(image_path) as img:
-                # Check size
-                width, height = img.size
-                if width < 64 or height < 64:
-                    return {"valid": False, "reason": f"Image size too small ({width}x{height})"}
-                
-                # Check variance (avoid black/white images)
-                img_np = np.array(img.convert("L"))
-                std = np.std(img_np)
-                if std < 10:
-                    return {"valid": False, "reason": f"Image lacks detail (low variance: {std:.2f})"}
-                
-                return {"valid": True, "reason": "OK"}
-        except Exception as e:
-            return {"valid": False, "reason": f"File error: {str(e)}"}
 

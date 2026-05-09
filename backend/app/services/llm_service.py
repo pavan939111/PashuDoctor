@@ -1,5 +1,6 @@
 import json
 import time
+import os
 import google.generativeai as genai
 from PIL import Image
 from typing import List, Dict, Any, Optional
@@ -46,7 +47,7 @@ class GeminiService:
         self,
         prompt: str,
         system_prompt: str = None,
-        image_path: str = None,
+        image_paths: List[str] = None,
         retries: int = None
     ) -> Dict[str, Any]:
         if retries is None:
@@ -56,9 +57,11 @@ class GeminiService:
             if system_prompt:
                 content.append(system_prompt)
             
-            if image_path:
-                img = Image.open(image_path)
-                content.append(img)
+            if image_paths:
+                for path in image_paths:
+                    if os.path.exists(path):
+                        img = Image.open(path)
+                        content.append(img)
             
             content.append(prompt)
             
@@ -90,7 +93,7 @@ class GeminiService:
             if any(term.lower() in err_msg.lower() for term in retry_worthy) and retries > 0:
                 print(f"Gemini error ({err_msg}). Rotating key and retrying...")
                 self.rotate_key()
-                return self.generate(prompt, system_prompt, image_path, retries - 1)
+                return self.generate(prompt, system_prompt, image_paths, retries - 1)
             
             print(f"Gemini generation error: {e}")
             return {
@@ -151,7 +154,7 @@ class GeminiService:
 
     def analyze_image_disease(
         self,
-        image_path: str,
+        image_paths: List[str],
         symptom_text: str,
         animal_type: str
     ) -> Dict[str, Any]:
@@ -170,7 +173,7 @@ class GeminiService:
             "}"
         )
         
-        result = self.generate(prompt=prompt, image_path=image_path)
+        result = self.generate(prompt=prompt, image_paths=image_paths)
         if result["success"]:
             try:
                 text = result["text"].strip()
@@ -205,7 +208,7 @@ class LLMRouter:
         prompt: str,
         system_prompt: str = None,
         routing_context: Dict[str, Any] = {},
-        image_path: str = None,
+        image_paths: List[str] = None,
         messages: List[Dict[str, str]] = None
     ) -> Dict[str, Any]:
         self.stats["total_calls"] += 1
@@ -214,7 +217,7 @@ class LLMRouter:
         if messages:
             response = self.gemini.generate_with_history(messages, system_prompt)
         else:
-            response = self.gemini.generate(prompt, system_prompt, image_path)
+            response = self.gemini.generate(prompt, system_prompt, image_paths)
             
         response["routed_to"] = "gemini"
         return response

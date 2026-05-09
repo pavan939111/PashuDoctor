@@ -139,6 +139,18 @@ def main():
     language = st.session_state.selected_language
     ui = lang_service.get_ui_strings(language)
 
+    # 3.2 Sidebar Alerts Logic
+    active_alerts = []
+    if st.session_state.get("user_state") and st.session_state.user_state != "Other":
+        alert_res = api_get(f"/alerts/?state={st.session_state.user_state}")
+        if alert_res.get("success"):
+            active_alerts = alert_res.get("alerts", [])
+
+    # 3.3 Connectivity Logic
+    online = is_online()
+    conn_status = "Connected" if online else "Offline Mode — Limited features"
+    conn_color = "#4CAF50" if online else "#FF9800"
+
     # 4. Temp file cleanup (one-time on startup)
     if "temp_cleaned" not in st.session_state:
         os.makedirs("temp", exist_ok=True)
@@ -155,6 +167,21 @@ def main():
                 <p style="color: #666; font-size: 0.9rem;">Your AI Livestock Expert</p>
             </div>
         """, unsafe_allow_html=True)
+        
+        # Connectivity Indicator
+        st.sidebar.markdown(f"""
+            <div style="display: flex; align-items: center; justify-content: center; margin-bottom: 1.5rem; padding: 5px; background: #f0f2f6; border-radius: 20px;">
+                <div style="width: 10px; height: 10px; background-color: {conn_color}; border-radius: 50%; margin-right: 10px;"></div>
+                <span style="font-size: 0.8rem; font-weight: 600; color: #444;">{conn_status}</span>
+            </div>
+        """, unsafe_allow_html=True)
+
+        # Display Active Alerts
+        if active_alerts:
+            st.warning(f"⚠️ **ACTIVE ALERTS in {st.session_state.user_state}**")
+            for alert in active_alerts:
+                st.markdown(f"• **{alert['disease']}** in {alert['district']}")
+            st.markdown("---")
         
         st.markdown(f"### 🛠 {ui.get('navigation', 'Navigation')}")
         if st.button(f"🏠 {ui.get('new_analysis', 'Home / New Analysis')}"):

@@ -19,6 +19,9 @@ from app.utils.confidence import (
     FollowUpQuestionGenerator
 )
 from app.utils.prompts import build_diagnosis_prompt, format_response_for_farmer, SYSTEM_PROMPT
+from app.utils.herd_alert import check_herd_alert
+from app.utils.breed_intelligence import get_breed_confidence_boost, get_breed_context
+from app.utils.connectivity import is_online
 from app.limiter import limiter
 
 router = APIRouter()
@@ -31,6 +34,71 @@ MAX_IMAGE_SIZE = 10 * 1024 * 1024 # 10MB
 # Ensure upload directory exists
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
+# Offline Cache (Static for demo, could be persistent)
+DIAGNOSIS_CACHE = {} 
+CACHE_LIMIT = 50
+
+EMERGENCY_KEYWORDS = [
+    # English
+    "collapsed", "not breathing", "seizure", "convulsion", "bleeding heavily", "sudden death", "unconscious", "dying",
+    # Hindi
+    "गिर गई", "बेहोश", "सांस नहीं", "खून बह रहा", "मर रहा", "दौरे",
+    # Tamil
+    "மயக்கம்", "மூச்சு இல்லை", "இரத்தம்", "வலிப்பு",
+    # Telugu
+    "పడిపోయింది", "శ్వాస లేదు", "రక్తం", "మూర్ఛ",
+    # Kannada
+    "ಬಿದ್ದಿದೆ", "ಉಸಿರಾಟವಿಲ್ಲ", "ರಕ್ತ", "ಸೆಳೆತ",
+    # Marathi
+    "कोलमडली", "श्वास नाही", "रक्तस्त्राव", "झटके",
+    # Bengali
+    "মাথা ঘুরে পড়ে", "নিশ্বাস বন্ধ", "রক্তপাত", "খিঁচুনি",
+    # Punjabi
+    "ਡਿੱਗ ਪਿਆ", "ਸਾਹ ਨਹੀਂ", "ਖੂਨ", "ਦੌਰੇ",
+    # Gujarati
+    "ઢળી પડી", "શ્વાસ નથી", "લોહી", "ખેંચ",
+    # Malayalam
+    "വീണു", "ശ്വാസമില്ല", "രക്തം", "അപസ്മാരം"
+]
+
+def check_emergency(text: str) -> bool:
+    if not text: return False
+    text = text.lower()
+    return any(kw in text for kw in EMERGENCY_KEYWORDS)
+
+def get_immediate_emergency_response(user_id: str, animal: str = "animal"):
+    return AnalyzeResponse(
+        case_id=str(uuid.uuid4()),
+        animal_detection=AnimalDetectionResult(animal=animal, confidence=1.0, method="fast_path"),
+        confidence=ConfidenceResult(
+            score=1.0, percentage=100, action="suggest", 
+            message="EMERGENCY DETECTED: Contact a veterinarian NOW.", 
+            show_prediction=True
+        ),
+        diagnosis=DiagnosisResult(
+            primary_diagnosis="CRITICAL EMERGENCY",
+            alternative_diagnoses=[],
+            matching_symptoms=["Emergency keywords detected"],
+            differential_reasoning="Fast-path emergency trigger activated.",
+            image_confidence=1.0,
+            symptom_confidence=1.0,
+            knowledge_confidence=1.0,
+            immediate_precautions=["Do NOT attempt home treatment", "Call 1962 immediately", "Keep animal in shade"],
+            urgent_warning_signs=["Life threatening condition"],
+            herd_prevention=[],
+            farmer_advice="EMERGENCY: Contact a veterinarian NOW. National Animal Helpline: 1962.",
+            vet_urgency="immediate",
+            severity="emergency",
+            formatted_response="### 🚨 EMERGENCY: Contact a veterinarian NOW.\n\n**National Animal Helpline: 1962**\n\nDo NOT attempt home treatment. This is a life-threatening situation."
+        ),
+        follow_up_questions=[],
+        top_candidates=[],
+        retrieval_time_ms=0,
+        llm_time_ms=0,
+        model_used="fast_path",
+        success=True
+    )
+
 def get_error_response(message: str, status_code: int = 500):
     return {
         "success": False,
@@ -39,11 +107,11 @@ def get_error_response(message: str, status_code: int = 500):
     }
 
 @router.post("/image", response_model=AnalyzeResponse)
-@limiter.limit("10/minute")
+@limiter.limit("5/minute")
 async def analyze_image(
     request: Request,
-    image: UploadFile = File(...),
     user_id: str = Form(...),
+    images: List[UploadFile] = File(...),
     symptom_text: str = Form(...),
     animal_type: Optional[str] = Form(None),
     language: str = Form("english"),
@@ -54,36 +122,48 @@ async def analyze_image(
     memory=Depends(get_memory)
 ):
     start_time = time.time()
-    temp_path = None
+    temp_paths = []
     
     try:
-        # 1. Image Validation (Size and Format)
-        if image.content_type not in ["image/jpeg", "image/png", "image/webp"]:
-            raise HTTPException(status_code=415, detail="Unsupported image format. Use JPEG, PNG, or WebP.")
-            
-        # Check size by reading a small chunk or the whole thing
-        contents = await image.read()
-        if len(contents) > MAX_IMAGE_SIZE:
-            raise HTTPException(status_code=413, detail="Image too large. Max size is 10MB.")
-        
-        # 2. Save Image
-        filename = f"{uuid.uuid4()}_{image.filename}"
-        temp_path = os.path.join(UPLOAD_DIR, filename)
-        with open(temp_path, "wb") as f:
-            f.write(contents)
-        
-        # 3. Quality Check
-        quality = image_service.check_image_quality(temp_path)
-        if not quality["valid"]:
-            raise HTTPException(status_code=400, detail=f"Invalid image: {quality['reason']}")
+        # 0. Emergency Fast Path
+        if check_emergency(symptom_text):
+            return get_immediate_emergency_response(user_id, animal_type or "animal")
 
-        # 4. Animal Detection (to refine retrieval if animal_type not provided)
-        detection = await anyio.to_thread.run_sync(image_service.detect_animal, temp_path)
+        # 1. Validation and Saving
+        if len(images) > 3:
+            images = images[:3]
+            
+        for image in images:
+            if image.content_type not in ["image/jpeg", "image/png", "image/webp"]:
+                raise HTTPException(status_code=415, detail=f"Unsupported format for {image.filename}")
+            
+            contents = await image.read()
+            if len(contents) > MAX_IMAGE_SIZE:
+                raise HTTPException(status_code=413, detail=f"Image {image.filename} too large.")
+            
+            filename = f"{uuid.uuid4()}_{image.filename}"
+            path = os.path.join(UPLOAD_DIR, filename)
+            with open(path, "wb") as f:
+                f.write(contents)
+            temp_paths.append(path)
+
+            # Quality Check
+            quality = image_service.check_image_quality(path)
+            if not quality["valid"]:
+                raise HTTPException(status_code=400, detail=f"Invalid image {image.filename}: {quality['reason']}")
+
+        if not temp_paths:
+            raise HTTPException(status_code=400, detail="No valid images uploaded.")
+
+        # 2. Animal Detection (using the first image as representative)
+        detection = await anyio.to_thread.run_sync(image_service.detect_animal, temp_paths[0])
         detected_animal = animal_type if animal_type else detection["animal"]
         
-        # 5. Retrieval
+        # 3. Retrieval with Combined Embedding
         retrieval_start = time.time()
-        results = await anyio.to_thread.run_sync(retrieval.retrieve_all, temp_path, symptom_text, detected_animal)
+        # We need a new retrieval method or hack it by passing the combined embedding
+        # For now, let's assume retrieval.retrieve_all can handle a list of paths
+        results = await anyio.to_thread.run_sync(retrieval.retrieve_all, temp_paths, symptom_text, detected_animal)
         retrieval_time = (time.time() - retrieval_start) * 1000
         
         # 6. Reranking
@@ -137,23 +217,41 @@ async def analyze_image(
             )
         elif routing["show_prediction"]:
             llm_start = time.time()
+            breed_context = "" # No breed for image detection yet, unless passed in query
             prompt = build_diagnosis_prompt(
                 detected_animal, 
                 symptom_text, 
                 reranked_results["disease_candidates"][:3], 
                 reranked_results["knowledge_chunks"][:3], 
-                confidence
+                confidence,
+                extra_context=breed_context
             )
             
-            llm_res = await anyio.to_thread.run_sync(
-                llm_router.generate,
-                prompt,
-                SYSTEM_PROMPT,
-                {
-                    "confidence_score": confidence["score"],
-                    "needs_image_analysis": False
-                }
-            )
+            if is_online():
+                llm_res = await anyio.to_thread.run_sync(
+                    llm_router.generate,
+                    prompt,
+                    SYSTEM_PROMPT,
+                    {},
+                    temp_paths,
+                    None
+                )
+
+                # Caching
+                if llm_res.get("success"):
+                    cache_key = f"{detected_animal}_{symptom_text[:50]}"
+                    DIAGNOSIS_CACHE[cache_key] = llm_res
+                    if len(DIAGNOSIS_CACHE) > CACHE_LIMIT:
+                        # Remove oldest (simplified)
+                        first_key = next(iter(DIAGNOSIS_CACHE))
+                        del DIAGNOSIS_CACHE[first_key]
+            else:
+                # Offline Cache Lookup
+                cache_key = f"{detected_animal}_{symptom_text[:50]}"
+                if cache_key in DIAGNOSIS_CACHE:
+                    llm_res = DIAGNOSIS_CACHE[cache_key]
+                else:
+                    return get_error_response("Offline mode: No cached diagnosis for these symptoms. Please connect to internet.", 503)
 
             llm_time = (time.time() - llm_start) * 1000
             model_used = llm_res.get("routed_to", "unknown")
@@ -190,7 +288,20 @@ async def analyze_image(
                         herd_prevention=diag_data.get("herd_prevention", []),
                         farmer_advice=diag_data.get("farmer_advice", ""),
                         vet_urgency=diag_data.get("vet_urgency", "monitor"),
-                        severity="moderate",
+                        severity={
+                            "immediate": "emergency",
+                            "within_24h": "severe",
+                            "within_week": "moderate",
+                            "monitor": "mild"
+                        }.get(diag_data.get("vet_urgency", "monitor"), "moderate"),
+                        herd_alert=check_herd_alert(primary_name, language if 'language' in locals() else request_body.language),
+                        breed=request_body.breed if 'request_body' in locals() else "Unknown",
+                        timeline=[{
+                            "day": 1,
+                            "event": "Initial Diagnosis",
+                            "note": f"{primary_name} suspected ({int(confidence.get('score', 0)*100)}%)",
+                            "timestamp": datetime.now().isoformat()
+                        }],
                         formatted_response=formatted
                     )
                 except Exception as e:
@@ -203,7 +314,8 @@ async def analyze_image(
             "user_id": user_id,
             "animal_type": detected_animal,
             "symptoms_text": symptom_text,
-            "image_path": temp_path,
+            "image_path": temp_paths[0], # Primary image for history
+            "all_images": temp_paths,
             "primary_diagnosis": diagnosis.primary_diagnosis if diagnosis else "Pending",
             "alternative_diagnoses": diagnosis.alternative_diagnoses if diagnosis else [],
             "matching_symptoms": diagnosis.matching_symptoms if diagnosis else [],
@@ -273,6 +385,10 @@ async def analyze_text(
     start_time = time.time()
     
     try:
+        # 0. Emergency Fast Path
+        if check_emergency(request_body.symptom_text):
+            return get_immediate_emergency_response(request_body.user_id, request_body.animal_type or "animal")
+
         # 1. Text-only Retrieval
         retrieval_start = time.time()
         # Use retrieve_all but pass None for image
@@ -332,23 +448,41 @@ async def analyze_text(
             )
         elif routing["show_prediction"]:
             llm_start = time.time()
+            breed_context = get_breed_context(request_body.breed)
             prompt = build_diagnosis_prompt(
                 request_body.animal_type or "unknown", 
                 request_body.symptom_text, 
                 reranked_results["disease_candidates"][:3], 
                 reranked_results["knowledge_chunks"][:3], 
-                confidence
+                confidence,
+                extra_context=breed_context
             )
             
-            llm_res = await anyio.to_thread.run_sync(
-                llm_router.generate,
-                prompt,
-                SYSTEM_PROMPT,
-                {
-                    "confidence_score": confidence["score"],
-                    "needs_image_analysis": False
-                }
-            )
+            if is_online():
+                llm_res = await anyio.to_thread.run_sync(
+                    llm_router.generate,
+                    prompt,
+                    SYSTEM_PROMPT,
+                    {
+                        "confidence_score": confidence["score"],
+                        "needs_image_analysis": False
+                    }
+                )
+                
+                # Caching
+                if llm_res.get("success"):
+                    cache_key = f"{request_body.animal_type}_{request_body.symptom_text[:50]}"
+                    DIAGNOSIS_CACHE[cache_key] = llm_res
+                    if len(DIAGNOSIS_CACHE) > CACHE_LIMIT:
+                        first_key = next(iter(DIAGNOSIS_CACHE))
+                        del DIAGNOSIS_CACHE[first_key]
+            else:
+                # Offline Cache Lookup
+                cache_key = f"{request_body.animal_type}_{request_body.symptom_text[:50]}"
+                if cache_key in DIAGNOSIS_CACHE:
+                    llm_res = DIAGNOSIS_CACHE[cache_key]
+                else:
+                    return get_error_response("Offline mode: No cached diagnosis for these symptoms. Please connect to internet.", 503)
             llm_time = (time.time() - llm_start) * 1000
             model_used = llm_res.get("routed_to", "unknown")
             
@@ -383,7 +517,20 @@ async def analyze_text(
                         herd_prevention=diag_data.get("herd_prevention", []),
                         farmer_advice=diag_data.get("farmer_advice", ""),
                         vet_urgency=diag_data.get("vet_urgency", "monitor"),
-                        severity="moderate",
+                        severity={
+                            "immediate": "emergency",
+                            "within_24h": "severe",
+                            "within_week": "moderate",
+                            "monitor": "mild"
+                        }.get(diag_data.get("vet_urgency", "monitor"), "moderate"),
+                        herd_alert=check_herd_alert(primary_name, language if 'language' in locals() else request_body.language),
+                        breed=request_body.breed if 'request_body' in locals() else "Unknown",
+                        timeline=[{
+                            "day": 1,
+                            "event": "Initial Diagnosis",
+                            "note": f"{primary_name} suspected ({int(confidence.get('score', 0)*100)}%)",
+                            "timestamp": datetime.now().isoformat()
+                        }],
                         formatted_response=formatted
                     )
                 except:
@@ -411,6 +558,14 @@ async def analyze_text(
             "llm_model_used": model_used,
             "retrieval_time_ms": retrieval_time
         }
+        
+        # Apply Breed Confidence Boost
+        if request_body.breed and diagnosis:
+            boost = get_breed_confidence_boost(request_body.breed, diagnosis.primary_diagnosis)
+            confidence["score"] = min(1.0, confidence["score"] + boost)
+            confidence["percentage"] = int(confidence["score"] * 100)
+            case_data["confidence_score"] = confidence["score"]
+
         case_id = await memory.save_case(case_data)
 
         return AnalyzeResponse(
