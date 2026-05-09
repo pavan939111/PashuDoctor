@@ -1,0 +1,176 @@
+import json
+from typing import List, Dict, Any, Optional
+
+SYSTEM_PROMPT = """
+You are PashuDoctor, an AI veterinary assistant for Indian livestock farmers. You help diagnose diseases in cattle, buffalo, goat, and sheep.
+
+Rules you must always follow:
+- Never prescribe specific drugs or dosages
+- Always recommend consulting a licensed veterinarian
+- Be clear, simple, and farmer-friendly in language
+- If unsure, say so honestly and ask for more information
+- Focus on Indian livestock diseases and conditions
+- Always mention precautions and preventive steps
+- End every diagnosis response with:
+  "IMPORTANT: Please consult a veterinarian before any treatment."
+"""
+
+def build_diagnosis_prompt(
+    animal_type: str,
+    symptom_text: str,
+    top_candidates: List[Dict[str, Any]],
+    knowledge_chunks: List[Dict[str, Any]],
+    confidence: Dict[str, Any],
+    answered_questions: List[Dict[str, str]] = []
+) -> str:
+    
+    # Format candidates
+    cases_str = ""
+    for i, c in enumerate(top_candidates):
+        m = c.get("metadata", {})
+        score = c.get("final_score", 0.0)
+        cases_str += f"- Case {i+1}: {m.get('disease', 'unknown')} in {m.get('animal', 'unknown')}\n"
+        cases_str += f"  Body part: {m.get('body_part', 'unknown')} | Severity: {m.get('severity', 'unknown')}\n"
+        cases_str += f"  Similarity score: {score:.2f}\n"
+
+    # Format knowledge
+    kb_str = ""
+    for chunk in knowledge_chunks:
+        text = chunk.get("text", "")
+        kb_str += f"- {text[:200]}...\n"
+
+    # Format answers
+    answers_str = ""
+    if answered_questions:
+        answers_str = "\nFARMER ALREADY ANSWERED:\n"
+        for qa in answered_questions:
+            q = qa.get("question", "")
+            a = qa.get("answer", "")
+            answers_str += f"Q: {q}\nA: {a}\n"
+
+    prompt = f"""
+ANIMAL: {animal_type}
+REPORTED SYMPTOMS: {symptom_text}
+
+RETRIEVED SIMILAR CASES:
+{cases_str}
+
+VETERINARY KNOWLEDGE:
+{kb_str}
+
+CONFIDENCE LEVEL: {confidence.get('percentage', 0)}%
+{answers_str}
+
+YOUR TASKS:
+1. Based on the evidence above, what is the most likely disease?
+2. List the key matching symptoms that support this diagnosis
+3. What immediate precautions should the farmer take?
+4. What are the warning signs that need urgent vet attention?
+5. Are there any preventive measures for the herd?
+
+Format your response as JSON:
+{{
+  "primary_diagnosis": "string",
+  "alternative_diagnoses": ["string"],
+  "matching_symptoms": ["string"],
+  "immediate_precautions": ["string"],
+  "urgent_warning_signs": ["string"],
+  "herd_prevention": ["string"],
+  "farmer_advice": "string",
+  "vet_urgency": "immediate/within_24h/within_week/monitor"
+}}
+"""
+    return prompt.strip()
+
+def build_followup_prompt(
+    animal_type: str,
+    symptom_text: str,
+    previous_questions: List[str],
+    new_answers: List[Dict[str, str]],
+    disease_hint: str = None
+) -> str:
+    history = ""
+    for qa in new_answers:
+        history += f"Q: {qa['question']}\nA: {qa['answer']}\n"
+        
+    prompt = f"""
+You are refining a diagnosis for a {animal_type}.
+Initial symptoms: {symptom_text}
+{f'Suspected condition: {disease_hint}' if disease_hint else ''}
+
+Conversation history:
+{history}
+
+Synthesise this information. What new details have been revealed? 
+How do these change the likelihood of the suspected condition?
+Provide a brief summary of the updated assessment.
+"""
+    return prompt.strip()
+
+def build_explanation_prompt(
+    diagnosis_result: Dict[str, Any],
+    top_candidates: List[Dict[str, Any]],
+    confidence: Dict[str, Any]
+) -> str:
+    prompt = f"""
+Explain why PashuDoctor suggested the diagnosis: {diagnosis_result.get('primary_diagnosis', 'Unknown')}.
+
+Evidence:
+- Found {len(top_candidates)} similar cases in the database.
+- Confidence score: {confidence.get('percentage', 0)}%.
+- Key matched symptoms: {', '.join(diagnosis_result.get('matching_symptoms', []))}.
+
+Provide a farmer-friendly explanation. Mention what would increase certainty (e.g., more photos, specific tests).
+"""
+    return prompt.strip()
+
+def build_severity_prompt(
+    animal_type: str,
+    diagnosis: str,
+    symptom_text: str,
+    answered_questions: List[Dict[str, str]]
+) -> str:
+    prompt = f"""
+Classify the severity of {diagnosis} in this {animal_type}.
+Symptoms: {symptom_text}
+Farmer answers: {json.dumps(answered_questions)}
+
+Criteria:
+- Mild: Animal is eating, fever is low, symptoms are localized.
+- Moderate: Animal has reduced appetite, moderate fever, multiple lesions.
+- Severe: Animal is not eating, high fever, difficulty breathing or walking.
+- Emergency: Animal is recumbent (cannot stand), extremely high fever, sudden death in herd.
+
+Return ONLY one word: mild / moderate / severe / emergency.
+"""
+    return prompt.strip()
+
+def format_response_for_farmer(
+    llm_response: Dict[str, Any],
+    language: str = "english"
+) -> str:
+    primary = llm_response.get("primary_diagnosis", "Unknown Condition")
+    percentage = llm_response.get("confidence_percentage", "N/A")
+    
+    symptoms = "\n".join([f"- {s}" for s in llm_response.get("matching_symptoms", [])])
+    precautions = "\n".join([f"- {p}" for p in llm_response.get("immediate_precautions", [])])
+    warnings = "\n".join([f"- {w}" for w in llm_response.get("urgent_warning_signs", [])])
+    
+    text = f"""
+Diagnosis: {primary}
+Confidence: {percentage}%
+
+Matching symptoms:
+{symptoms}
+
+Immediate steps:
+{precautions}
+
+See vet immediately if:
+{warnings}
+
+{llm_response.get('farmer_advice', '')}
+
+Please consult a licensed veterinarian.
+"""
+    return text.strip()

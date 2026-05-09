@@ -10,17 +10,21 @@ __pycache__/
 env/
 venv/
 
-# Data and Databases
-data/chroma_db/
-data/*.db
-data/raw/
-data/processed/
-data/knowledge_base/
+# Data and Databases (Ignore all large data, keep structure if needed)
+data/
+!data/.gitkeep
+*.db
+*.sqlite
 
-# Model weights
-*.pt
-*.bin
+# Temporary files
+temp/
+scratch/
+*.jpg
+*.png
+*.mp3
 
 # OS specific
 .DS_Store
 Thumbs.db
+.idea/
+.vscode/

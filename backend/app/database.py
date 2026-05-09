@@ -14,6 +14,15 @@ async_session = async_sessionmaker(
 class Base(DeclarativeBase):
     pass
 
+# Import models here AFTER Base is defined to register them with Base.metadata
+# and avoid circular imports (since models import Base)
+from app.models.user import User
+from app.models.case import Case, ChatMessage
+
 async def get_db():
     async with async_session() as session:
         yield session
+
+async def create_db_tables():
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)

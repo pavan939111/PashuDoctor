@@ -1,3 +1,536 @@
-class RetrievalService:
-    def search(self, query):
-        pass
+import chromadb
+import numpy as np
+import os
+import json
+import pickle
+import time
+from rank_bm25 import BM25Okapi
+from typing import List, Dict, Any, Optional
+from app.config import get_settings
+
+settings = get_settings()
+
+class ChromaDBManager:
+    def __init__(self):
+        # 1. Initialize persistent client
+        self.client = chromadb.PersistentClient(path=settings.CHROMA_PATH)
+        
+        # 2. Get or create collections
+        self.disease_collection = self.client.get_or_create_collection(
+            name="livestock_diseases",
+            metadata={"hnsw:space": "cosine"}
+        )
+        
+        self.knowledge_collection = self.client.get_or_create_collection(
+            name="knowledge_base",
+            metadata={"hnsw:space": "cosine"}
+        )
+        
+        self.cases_collection = self.client.get_or_create_collection(
+            name="resolved_cases",
+            metadata={"hnsw:space": "cosine"}
+        )
+        
+        # Print stats
+        d_count = self.disease_collection.count()
+        k_count = self.knowledge_collection.count()
+        
+        print(f"ChromaDB Manager Initialized")
+        print(f"Disease collection: {d_count} records")
+        print(f"Knowledge collection: {k_count} records")
+
+    def add_disease_image(
+        self,
+        image_id: str,
+        embedding: np.ndarray,
+        metadata: Dict[str, Any]
+    ):
+        """
+        metadata must contain: animal, disease, body_part, severity, source, split
+        """
+        # Ensure embedding is a list
+        emb_list = embedding.tolist() if isinstance(embedding, np.ndarray) else list(embedding)
+        
+        self.disease_collection.add(
+            ids=[image_id],
+            embeddings=[emb_list],
+            metadatas=[metadata]
+        )
+
+    def add_knowledge_chunk(
+        self,
+        chunk_id: str,
+        embedding: np.ndarray,
+        metadata: Dict[str, Any],
+        text: str
+    ):
+        """
+        metadata must contain: source, disease_tags, animal_tags
+        """
+        emb_list = embedding.tolist() if isinstance(embedding, np.ndarray) else list(embedding)
+        
+        self.knowledge_collection.add(
+            ids=[chunk_id],
+            embeddings=[emb_list],
+            metadatas=[metadata],
+            documents=[text]
+        )
+
+    def query_diseases(
+        self,
+        query_embedding: np.ndarray,
+        animal_type: str,
+        n_results: int = 20
+    ) -> List[Dict[str, Any]]:
+        
+        emb_list = query_embedding.tolist() if isinstance(query_embedding, np.ndarray) else list(query_embedding)
+        
+        results = self.disease_collection.query(
+            query_embeddings=[emb_list],
+            n_results=n_results,
+            where={"animal": animal_type}
+        )
+        
+        # Format results
+        formatted = []
+        if results["ids"] and results["ids"][0]:
+            for i in range(len(results["ids"][0])):
+                formatted.append({
+                    "id": results["ids"][0][i],
+                    "distance": results["distances"][0][i] if results["distances"] else 0,
+                    "metadata": results["metadatas"][0][i]
+                })
+        return formatted
+
+    def query_knowledge(
+        self,
+        query_embedding: np.ndarray,
+        disease_hint: str = None,
+        n_results: int = 10
+    ) -> List[Dict[str, Any]]:
+        
+        emb_list = query_embedding.tolist() if isinstance(query_embedding, np.ndarray) else list(query_embedding)
+        
+        where_filter = None
+        if disease_hint:
+            # Try $contains first as requested
+            where_filter = {"disease_tags": {"$contains": disease_hint}}
+            
+        try:
+            results = self.knowledge_collection.query(
+                query_embeddings=[emb_list],
+                n_results=n_results,
+                where=where_filter
+            )
+            # If we got 0 results with a filter, try without the filter
+            if not results["ids"] or not results["ids"][0]:
+                if disease_hint:
+                    print(f"No results for disease_hint '{disease_hint}'. Retrying without filter.")
+                    results = self.knowledge_collection.query(
+                        query_embeddings=[emb_list],
+                        n_results=n_results
+                    )
+        except Exception as e:
+            print(f"Warning: ChromaDB query with $contains failed: {e}. Falling back to no filter.")
+            results = self.knowledge_collection.query(
+                query_embeddings=[emb_list],
+                n_results=n_results
+            )
+            
+        formatted = []
+        if results["ids"] and results["ids"][0]:
+            for i in range(len(results["ids"][0])):
+                formatted.append({
+                    "id": results["ids"][0][i],
+                    "distance": results["distances"][0][i] if results["distances"] else 0,
+                    "metadata": results["metadatas"][0][i],
+                    "text": results["documents"][0][i] if results["documents"] else ""
+                })
+        return formatted
+
+    def get_collection_stats(self) -> Dict[str, Any]:
+        # Iterate all metadata to aggregate
+        # NOTE: This can be slow for very large collections, but fine for our scale
+        all_data = self.disease_collection.get(include=["metadatas"])
+        metadatas = all_data["metadatas"]
+        
+        stats = {
+            "total": len(metadatas),
+            "by_animal": {},
+            "by_disease": {}
+        }
+        
+        for meta in metadatas:
+            animal = meta.get("animal", "unknown")
+            disease = meta.get("disease", "unknown")
+            
+            stats["by_animal"][animal] = stats["by_animal"].get(animal, 0) + 1
+            stats["by_disease"][disease] = stats["by_disease"].get(disease, 0) + 1
+            
+        return stats
+
+    def delete_and_rebuild(self, confirmation: str):
+        if confirmation != "REBUILD":
+            print("Action cancelled. Rebuild requires 'REBUILD' confirmation.")
+            return
+            
+        try:
+            self.client.delete_collection("livestock_diseases")
+        except:
+            pass
+            
+        try:
+            self.client.delete_collection("knowledge_base")
+        except:
+            pass
+            
+        self.disease_collection = self.client.get_or_create_collection(
+            name="livestock_diseases",
+            metadata={"hnsw:space": "cosine"}
+        )
+        self.knowledge_collection = self.client.get_or_create_collection(
+            name="knowledge_base",
+            metadata={"hnsw:space": "cosine"}
+        )
+        print("Both collections deleted and recreated successfully.")
+
+class BM25IndexManager:
+    def __init__(self, chroma_manager: Optional[ChromaDBManager] = None):
+        self.chroma = chroma_manager
+        self.knowledge_path = os.path.join("data", "processed", "knowledge_bm25.pkl")
+        self.symptom_path = os.path.join("data", "processed", "symptom_bm25.pkl")
+        
+        self.knowledge_docs = []
+        self.symptom_docs = []
+        
+        self.knowledge_bm25 = None
+        self.symptom_bm25 = None
+        
+        # Load or rebuild
+        self.load_indexes()
+
+    def _tokenize(self, text: str) -> List[str]:
+        return text.lower().split()
+
+    def load_indexes(self):
+        if os.path.exists(self.knowledge_path) and os.path.exists(self.symptom_path):
+            try:
+                with open(self.knowledge_path, "rb") as f:
+                    data = pickle.load(f)
+                    self.knowledge_bm25 = data["bm25"]
+                    self.knowledge_docs = data["docs"]
+                
+                with open(self.symptom_path, "rb") as f:
+                    data = pickle.load(f)
+                    self.symptom_bm25 = data["bm25"]
+                    self.symptom_docs = data["docs"]
+                
+                print(f"BM25 indexes loaded: knowledge={len(self.knowledge_docs)} docs, symptom={len(self.symptom_docs)} docs")
+                return
+            except Exception as e:
+                print(f"Error loading BM25 indexes: {e}. Rebuilding...")
+        
+        # If not loaded, rebuild if we have chroma manager
+        if self.chroma:
+            self.rebuild_indexes()
+        else:
+            print("BM25 indexes not found and no ChromaDBManager provided to rebuild.")
+
+    def rebuild_indexes(self):
+        print("Building BM25 indexes from scratch...")
+        
+        # 1. Load Knowledge Chunks
+        chunks_path = os.path.join("data", "knowledge_base", "chunks.jsonl")
+        self.knowledge_docs = []
+        if os.path.exists(chunks_path):
+            with open(chunks_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    self.knowledge_docs.append(json.loads(line))
+        
+        tokenized_k_docs = [self._tokenize(doc["text"]) for doc in self.knowledge_docs]
+        if tokenized_k_docs:
+            self.knowledge_bm25 = BM25Okapi(tokenized_k_docs)
+            with open(self.knowledge_path, "wb") as f:
+                pickle.dump({"bm25": self.knowledge_bm25, "docs": self.knowledge_docs}, f)
+        
+        # 2. Load Disease Metadata from Chroma
+        self.symptom_docs = []
+        if self.chroma:
+            all_data = self.chroma.disease_collection.get(include=["metadatas"])
+            self.symptom_docs = [{"id": id_val, "metadata": meta} for id_val, meta in zip(all_data["ids"], all_data["metadatas"])]
+            
+            symptom_texts = []
+            for doc in self.symptom_docs:
+                m = doc["metadata"]
+                # Use description if available, else fallback to basic tags
+                text = m.get("description")
+                if not text:
+                    text = f"{m.get('animal', '')} {m.get('disease', '')} {m.get('body_part', '')} {m.get('severity', '')}"
+                symptom_texts.append(text)
+            
+            tokenized_s_docs = [self._tokenize(text) for text in symptom_texts]
+            if tokenized_s_docs:
+                self.symptom_bm25 = BM25Okapi(tokenized_s_docs)
+                with open(self.symptom_path, "wb") as f:
+                    pickle.dump({"bm25": self.symptom_bm25, "docs": self.symptom_docs}, f)
+        
+        print(f"BM25 indexes built: knowledge={len(self.knowledge_docs)} docs, symptom={len(self.symptom_docs)} docs")
+
+    def search_knowledge_bm25(self, query: str, top_k: int = 20) -> List[Dict[str, Any]]:
+        if not self.knowledge_bm25:
+            return []
+        
+        tokens = self._tokenize(query)
+        scores = self.knowledge_bm25.get_scores(tokens)
+        
+        # Get top indices
+        top_n = np.argsort(scores)[::-1][:top_k]
+        
+        results = []
+        for idx in top_n:
+            if scores[idx] < 0.01:
+                continue
+            doc = self.knowledge_docs[idx]
+            results.append({
+                "chunk_id": doc["chunk_id"],
+                "text": doc["text"],
+                "bm25_score": float(scores[idx]),
+                "metadata": {
+                    "source": doc.get("source"),
+                    "disease_tags": doc.get("disease_tags"),
+                    "animal_tags": doc.get("animal_tags")
+                }
+            })
+        return results
+
+    def search_symptom_bm25(self, query: str, animal_type: str = None, top_k: int = 20) -> List[Dict[str, Any]]:
+        if not self.symptom_bm25:
+            return []
+        
+        tokens = self._tokenize(query)
+        scores = self.symptom_bm25.get_scores(tokens)
+        
+        # Get all results and filter by animal if provided
+        all_indices = np.argsort(scores)[::-1]
+        
+        results = []
+        for idx in all_indices:
+            if scores[idx] < 0.01:
+                continue
+            
+            doc = self.symptom_docs[idx]
+            # Filter by animal
+            if animal_type and doc["metadata"].get("animal") != animal_type:
+                continue
+                
+            results.append({
+                "image_id": doc["id"],
+                "bm25_score": float(scores[idx]),
+                "metadata": doc["metadata"]
+            })
+            
+            if len(results) >= top_k:
+                break
+                
+        return results
+
+    def update_indexes_incremental(self, new_chunks: List[Dict[str, Any]]):
+        # This is simplified - we just append and full rebuild for now
+        self.knowledge_docs.extend(new_chunks)
+        self.rebuild_indexes()
+
+class HybridRetrievalEngine:
+    def __init__(
+        self, 
+        chroma_manager: ChromaDBManager, 
+        bm25_manager: BM25IndexManager,
+        image_service: Any,
+        text_service: Any
+    ):
+        self.chroma = chroma_manager
+        self.bm25 = bm25_manager
+        self.image_service = image_service
+        self.text_service = text_service
+        
+        self.dense_weight = settings.DENSE_WEIGHT
+        self.bm25_weight = settings.BM25_WEIGHT
+        
+        print("HybridRetrievalEngine initialised")
+
+    def normalize_scores(self, scores: List[float]) -> List[float]:
+        if not scores:
+            return []
+        s_min = min(scores)
+        s_max = max(scores)
+        if s_max == s_min:
+            return [0.0] * len(scores)
+        return [(s - s_min) / (s_max - s_min) for s in scores]
+
+    def retrieve_disease_candidates(
+        self,
+        image_embedding: np.ndarray,
+        symptom_text: str,
+        animal_type: str,
+        top_k: int = 20
+    ) -> List[Dict[str, Any]]:
+        
+        # 1. Dense Retrieval (Similarity = 1 - Distance)
+        dense_results = self.chroma.query_diseases(image_embedding, animal_type, n_results=top_k * 2)
+        
+        # 2. BM25 Retrieval
+        bm25_results = self.bm25.search_symptom_bm25(symptom_text, animal_type=animal_type, top_k=top_k * 2)
+        
+        # 3. Score Fusion
+        candidates = {}
+        
+        for res in dense_results:
+            idx = res["id"]
+            candidates[idx] = {
+                "dense_score": 1.0 - res["distance"],
+                "bm25_score": 0.0,
+                "metadata": res["metadata"]
+            }
+            
+        for res in bm25_results:
+            idx = res["image_id"]
+            if idx in candidates:
+                candidates[idx]["bm25_score"] = res["bm25_score"]
+            else:
+                candidates[idx] = {
+                    "dense_score": 0.0,
+                    "bm25_score": res["bm25_score"],
+                    "metadata": res["metadata"]
+                }
+                
+        # 4. Normalize
+        ids = list(candidates.keys())
+        if not ids: return []
+        
+        dense_scores = [candidates[i]["dense_score"] for i in ids]
+        bm25_scores = [candidates[i]["bm25_score"] for i in ids]
+        
+        norm_dense = self.normalize_scores(dense_scores)
+        norm_bm25 = self.normalize_scores(bm25_scores)
+        
+        # 5. Combine and Sort
+        final_list = []
+        for i, idx in enumerate(ids):
+            score = (self.dense_weight * norm_dense[i]) + (self.bm25_weight * norm_bm25[i])
+            final_list.append({
+                "image_id": idx,
+                "final_score": float(score),
+                "dense_score": float(dense_scores[i]),
+                "bm25_score": float(bm25_scores[i]),
+                "metadata": candidates[idx]["metadata"]
+            })
+            
+        final_list.sort(key=lambda x: x["final_score"], reverse=True)
+        return final_list[:top_k]
+
+    def retrieve_knowledge_candidates(
+        self,
+        text_embedding: np.ndarray,
+        symptom_text: str,
+        disease_hint: str = None,
+        top_k: int = 10
+    ) -> List[Dict[str, Any]]:
+        
+        # 1. Dense Retrieval
+        dense_results = self.chroma.query_knowledge(text_embedding, disease_hint, n_results=top_k * 2)
+        
+        # 2. BM25 Retrieval
+        bm25_results = self.bm25.search_knowledge_bm25(symptom_text, top_k=top_k * 2)
+        
+        # 3. Fusion
+        candidates = {}
+        for res in dense_results:
+            idx = res["id"]
+            candidates[idx] = {
+                "dense_score": 1.0 - res["distance"],
+                "bm25_score": 0.0,
+                "text": res["text"],
+                "metadata": res["metadata"]
+            }
+            
+        for res in bm25_results:
+            idx = res["chunk_id"]
+            if idx in candidates:
+                candidates[idx]["bm25_score"] = res["bm25_score"]
+            else:
+                candidates[idx] = {
+                    "dense_score": 0.0,
+                    "bm25_score": res["bm25_score"],
+                    "text": res["text"],
+                    "metadata": res["metadata"]
+                }
+                
+        ids = list(candidates.keys())
+        if not ids: return []
+        
+        norm_dense = self.normalize_scores([candidates[i]["dense_score"] for i in ids])
+        norm_bm25 = self.normalize_scores([candidates[i]["bm25_score"] for i in ids])
+        
+        final_list = []
+        for i, idx in enumerate(ids):
+            score = (self.dense_weight * norm_dense[i]) + (self.bm25_weight * norm_bm25[i])
+            final_list.append({
+                "chunk_id": idx,
+                "final_score": float(score),
+                "dense_score": float(candidates[idx]["dense_score"]),
+                "bm25_score": float(candidates[idx]["bm25_score"]),
+                "text": candidates[idx]["text"],
+                "metadata": candidates[idx]["metadata"]
+            })
+            
+        final_list.sort(key=lambda x: x["final_score"], reverse=True)
+        return final_list[:top_k]
+
+    def retrieve_all(
+        self,
+        image_path: str,
+        symptom_text: str,
+        animal_type: str = None
+    ) -> Dict[str, Any]:
+        
+        start_time = time.time()
+        
+        # a. Animal Detection
+        animal_conf = 1.0
+        if not animal_type:
+            detection = self.image_service.detect_animal(image_path)
+            animal_type = detection["animal"]
+            animal_conf = detection["confidence"]
+            
+        # b. Image Embedding
+        image_emb = self.image_service.get_image_embedding(image_path)
+        
+        # c. Text Embedding
+        text_emb_384 = self.text_service.get_text_embedding(symptom_text)
+        
+        # d. Retrieve Disease Candidates
+        disease_candidates = self.retrieve_disease_candidates(
+            image_embedding=image_emb,
+            symptom_text=symptom_text,
+            animal_type=animal_type
+        )
+        
+        # e. Retrieve Knowledge
+        disease_hint = None
+        if disease_candidates and disease_candidates[0]["final_score"] > 0.6:
+            disease_hint = disease_candidates[0]["metadata"]["disease"]
+            
+        knowledge_chunks = self.retrieve_knowledge_candidates(
+            text_embedding=text_emb_384,
+            symptom_text=symptom_text,
+            disease_hint=disease_hint
+        )
+        
+        end_time = time.time()
+        
+        return {
+            "animal_type": animal_type,
+            "animal_confidence": float(animal_conf),
+            "disease_candidates": disease_candidates,
+            "knowledge_chunks": knowledge_chunks,
+            "retrieval_time_ms": (end_time - start_time) * 1000
+        }
