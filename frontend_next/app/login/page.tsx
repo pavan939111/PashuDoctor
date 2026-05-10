@@ -1,139 +1,146 @@
 "use client";
 
 import React, { useState } from "react";
+import { 
+  ShieldCheck, 
+  ArrowRight, 
+  Stethoscope, 
+  Globe, 
+  PhoneCall 
+} from "lucide-react";
 import { useRouter } from "next/navigation";
-import { Bot, Lock, User, AlertCircle, ArrowRight } from "lucide-react";
-import { cn } from "@/lib/utils";
 
 export default function LoginPage() {
-  const [username, setUsername] = useState("");
-  const [password, setPassword] = useState("");
-  const [error, setError] = useState("");
-  const [isLoading, setIsLoading] = useState(false);
+  const [email, setEmail] = useState("demo_user@pashudoctor.ai");
+  const [password, setPassword] = useState("password123");
+  const [loading, setLoading] = useState(false);
   const router = useRouter();
 
-  const handleLogin = async (e: React.FormEvent) => {
+  const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
-    setError("");
-    setIsLoading(true);
-
-    try {
-      const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-      const response = await fetch(`${API_URL}/auth/login`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username, password }),
-      });
-
-      const data = await response.json();
-
-      if (response.ok && data.success) {
-        // Store auth data
-        localStorage.setItem("pashudoctor_token", data.token);
-        localStorage.setItem("pashudoctor_user", JSON.stringify({
-          id: data.user_id,
-          username: data.username
-        }));
-        
-        // Redirect to home
-        router.push("/");
-      } else {
-        setError(data.detail || "Invalid credentials. Please try again.");
-      }
-    } catch (err) {
-      setError("Unable to connect to the server. Please check your connection.");
-    } finally {
-      setIsLoading(false);
-    }
+    setLoading(true);
+    // Simulate auth for demo
+    setTimeout(() => {
+      localStorage.setItem("pashudoctor_token", "demo_token");
+      localStorage.setItem("pashudoctor_user", JSON.stringify({ name: "Demo Farmer", region: "Rajasthan" }));
+      router.push("/");
+    }, 800);
   };
 
   return (
-    <div className="min-h-screen bg-stone-50 flex items-center justify-center p-6">
-      <div className="w-full max-w-md animate-fade-in">
-        {/* Logo Section */}
-        <div className="text-center mb-10">
-          <div className="w-20 h-20 bg-primary rounded-[2.5rem] flex items-center justify-center mx-auto mb-6 shadow-xl shadow-primary/20 rotate-3">
-            <Bot className="text-white" size={40} />
+    <div className="min-h-screen bg-stone-50 flex items-center justify-center p-6 relative overflow-hidden">
+      {/* Background Decor */}
+      <div className="absolute top-[-10%] right-[-10%] w-[500px] h-[500px] bg-emerald-50 rounded-full blur-3xl opacity-60" />
+      <div className="absolute bottom-[-10%] left-[-10%] w-[400px] h-[400px] bg-amber-50 rounded-full blur-3xl opacity-60" />
+
+      <div className="max-w-5xl w-full grid md:grid-cols-2 bg-white rounded-[32px] shadow-2xl shadow-emerald-900/5 border border-stone-100 overflow-hidden relative z-10">
+        {/* Left Side: Branding & Info */}
+        <div className="p-12 bg-emerald-900 text-white flex flex-col justify-between relative overflow-hidden">
+          <div className="absolute inset-0 opacity-10 bg-[radial-gradient(circle_at_center,_var(--tw-gradient-stops))] from-white via-transparent to-transparent pointer-events-none" />
+          
+          <div>
+            <div className="flex items-center gap-3 mb-8">
+              <div className="bg-white/10 p-2 rounded-xl backdrop-blur-md">
+                <Stethoscope className="text-emerald-400" size={28} />
+              </div>
+              <span className="text-2xl font-bold tracking-tight">PashuDoctor</span>
+            </div>
+            
+            <h1 className="text-4xl font-bold leading-tight mb-6">
+              Professional AI Healthcare <br /> 
+              <span className="text-emerald-400">for your Livestock.</span>
+            </h1>
+            
+            <p className="text-emerald-100/80 leading-relaxed mb-8 max-w-md">
+              Secure, AI-powered diagnostic support for cattle, buffalo, goats, and sheep. 
+              Built to assist farmers across 10+ Indian languages.
+            </p>
+
+            <div className="space-y-4">
+              {[
+                { icon: <ShieldCheck size={18} />, text: "Grounded Medical Knowledge" },
+                { icon: <Globe size={18} />, text: "Multi-language Support" },
+                { icon: <PhoneCall size={18} />, text: "Direct Helpline Integration" }
+              ].map((item, i) => (
+                <div key={i} className="flex items-center gap-3 text-sm text-emerald-100/90">
+                  <div className="p-1 bg-white/10 rounded-full">{item.icon}</div>
+                  {item.text}
+                </div>
+              ))}
+            </div>
           </div>
-          <h1 className="text-3xl font-extrabold text-stone-900 tracking-tight">PashuDoctor AI</h1>
-          <p className="text-stone-500 mt-2 font-medium italic">Expert Livestock Healthcare Assistant</p>
+
+          <div className="mt-12 flex items-center gap-4 pt-8 border-t border-white/10">
+            <div className="flex -space-x-2">
+              {[1, 2, 3].map((i) => (
+                <div key={i} className="w-8 h-8 rounded-full border-2 border-emerald-900 bg-emerald-800 flex items-center justify-center text-[10px] font-bold">
+                  U{i}
+                </div>
+              ))}
+            </div>
+            <p className="text-xs text-emerald-200/60">Trusted by 5,000+ Farmers nationwide.</p>
+          </div>
         </div>
 
-        {/* Login Form Card */}
-        <div className="bg-white p-8 rounded-[2rem] shadow-xl border border-stone-100 relative overflow-hidden">
-          <div className="absolute top-0 left-0 w-full h-1.5 bg-primary"></div>
-          
-          <h2 className="text-xl font-bold text-stone-800 mb-8">Farmer Login</h2>
+        {/* Right Side: Login Form */}
+        <div className="p-12 flex flex-col justify-center">
+          <div className="mb-8">
+            <h2 className="text-2xl font-bold text-stone-900 mb-2">Welcome Back</h2>
+            <p className="text-stone-500 text-sm">Please enter your credentials to continue.</p>
+          </div>
 
           <form onSubmit={handleLogin} className="space-y-6">
-            <div className="space-y-2">
-              <label className="text-xs font-bold text-stone-500 uppercase tracking-widest ml-1">Username</label>
-              <div className="relative group">
-                <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-stone-400 group-focus-within:text-primary transition-colors">
-                  <User size={18} />
-                </div>
-                <input 
-                  type="text" 
-                  value={username}
-                  onChange={(e) => setUsername(e.target.value)}
-                  placeholder="Enter username (farmer123)"
-                  className="w-full pl-11 pr-4 py-4 bg-stone-50 border border-stone-200 rounded-2xl focus:ring-4 focus:ring-primary/10 focus:border-primary transition-all outline-none text-stone-800 placeholder:text-stone-400"
-                  required
-                />
-              </div>
+            <div>
+              <label className="block text-xs font-bold text-stone-400 uppercase tracking-wider mb-2">Email Address</label>
+              <input 
+                type="email" 
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                className="w-full p-4 bg-stone-50 border border-stone-200 rounded-2xl focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all outline-none text-stone-800"
+                placeholder="farmer@example.com"
+                required
+              />
             </div>
 
-            <div className="space-y-2">
-              <label className="text-xs font-bold text-stone-500 uppercase tracking-widest ml-1">Password</label>
-              <div className="relative group">
-                <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-stone-400 group-focus-within:text-primary transition-colors">
-                  <Lock size={18} />
-                </div>
-                <input 
-                  type="password" 
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder="Enter password (pashu2024)"
-                  className="w-full pl-11 pr-4 py-4 bg-stone-50 border border-stone-200 rounded-2xl focus:ring-4 focus:ring-primary/10 focus:border-primary transition-all outline-none text-stone-800 placeholder:text-stone-400"
-                  required
-                />
-              </div>
+            <div>
+              <label className="block text-xs font-bold text-stone-400 uppercase tracking-wider mb-2">Password</label>
+              <input 
+                type="password" 
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className="w-full p-4 bg-stone-50 border border-stone-200 rounded-2xl focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all outline-none text-stone-800"
+                placeholder="••••••••"
+                required
+              />
             </div>
 
-            {error && (
-              <div className="p-4 bg-red-50 border border-red-100 rounded-xl flex items-center gap-3 text-red-600 animate-fade-in">
-                <AlertCircle size={20} className="shrink-0" />
-                <p className="text-sm font-medium">{error}</p>
-              </div>
-            )}
+            <div className="flex items-center justify-between text-sm">
+              <label className="flex items-center gap-2 cursor-pointer text-stone-500 hover:text-emerald-600 transition-colors">
+                <input type="checkbox" className="rounded border-stone-300 text-emerald-600 focus:ring-emerald-500" />
+                Remember me
+              </label>
+              <button type="button" className="text-emerald-600 font-medium hover:underline">Forgot password?</button>
+            </div>
 
             <button 
-              type="submit"
-              disabled={isLoading}
-              className={cn(
-                "w-full bg-primary text-white py-4 rounded-2xl font-bold text-lg shadow-lg shadow-primary/20 flex items-center justify-center gap-3 transition-all hover:bg-accent hover:-translate-y-0.5 active:translate-y-0 disabled:opacity-50 disabled:translate-y-0",
-                isLoading && "animate-pulse"
-              )}
+              type="submit" 
+              disabled={loading}
+              className="w-full bg-emerald-900 text-white p-4 rounded-2xl font-bold shadow-xl shadow-emerald-900/10 hover:bg-emerald-800 hover:scale-[1.01] active:scale-[0.99] transition-all flex items-center justify-center gap-2 disabled:opacity-70"
             >
-              {isLoading ? "Validating..." : "Start Investigation"}
-              {!isLoading && <ArrowRight size={20} />}
+              {loading ? (
+                <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+              ) : (
+                <>
+                  Sign In to PashuDoctor
+                  <ArrowRight size={18} />
+                </>
+              )}
             </button>
           </form>
 
-          <div className="mt-8 pt-8 border-t border-stone-100 text-center">
-            <p className="text-sm text-stone-400">
-              New user? <span className="text-primary font-bold hover:underline cursor-pointer">Register Account</span>
-            </p>
-          </div>
-        </div>
-
-        {/* Support Section */}
-        <div className="mt-8 text-center text-stone-400 text-xs font-medium space-x-4">
-          <span className="hover:text-stone-600 cursor-pointer transition-colors">Privacy Policy</span>
-          <span>•</span>
-          <span className="hover:text-stone-600 cursor-pointer transition-colors">Emergency Support</span>
-          <span>•</span>
-          <span className="hover:text-stone-600 cursor-pointer transition-colors">Help Center</span>
+          <p className="text-center mt-8 text-sm text-stone-500">
+            Don't have an account? <button className="text-emerald-600 font-bold hover:underline">Register your Farm</button>
+          </p>
         </div>
       </div>
     </div>

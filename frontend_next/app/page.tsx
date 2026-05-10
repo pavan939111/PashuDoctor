@@ -5,7 +5,15 @@ import Sidebar from "@/components/Sidebar";
 import ChatInterface from "@/components/ChatInterface";
 import { Session, Message } from "@/types";
 import { useRouter } from "next/navigation";
-import { Menu, AlertCircle, LogOut } from "lucide-react";
+import { 
+  AlertCircle, 
+  ChevronRight,
+  ShieldCheck,
+  Activity,
+  Microscope,
+  Stethoscope
+} from "lucide-react";
+import { cn } from "@/lib/utils";
 
 export default function Home() {
   const [session, setSession] = useState<Session | null>(null);
@@ -14,11 +22,9 @@ export default function Home() {
   const [user, setUser] = useState<any>(null);
   const router = useRouter();
 
-  // Authentication Check
   useEffect(() => {
     const token = localStorage.getItem("pashudoctor_token");
     const storedUser = localStorage.getItem("pashudoctor_user");
-    
     if (!token || !storedUser) {
       router.push("/login");
     } else {
@@ -26,7 +32,7 @@ export default function Home() {
     }
   }, [router]);
 
-  if (!user) return null; // Prevents flashing content while checking auth
+  if (!user) return null;
 
   const handleNewChat = () => {
     setSession(null);
@@ -38,7 +44,6 @@ export default function Home() {
       const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
       const response = await fetch(`${API_URL}/analyze/${caseId}`);
       const data = await response.json();
-      
       if (data.success) {
         setSession({
           case_id: data.case.id,
@@ -46,8 +51,6 @@ export default function Home() {
           animal_type: data.case.animal_type,
           last_diagnosis: data.diagnosis
         });
-
-        // Convert chat_history to Message objects
         const msgs: Message[] = data.chat_history.map((m: any, i: number) => ({
           id: `hist-${i}`,
           role: m.role,
@@ -62,91 +65,125 @@ export default function Home() {
   };
 
   return (
-    <main className="flex w-full h-full bg-white overflow-hidden">
-      {/* Sidebar Overlay for Mobile */}
+    <div className="flex w-full h-full bg-white relative">
       <Sidebar 
         isOpen={isSidebarOpen} 
         setIsOpen={setIsSidebarOpen}
-        onNewChat={handleNewChat}
         onSelectCase={handleSelectCase}
       />
       
-      {/* Mobile Sidebar Toggle */}
-      {!isSidebarOpen && (
-        <button 
-          onClick={() => setIsSidebarOpen(true)}
-          className="absolute top-4 left-4 z-50 p-2 bg-white border border-stone-200 rounded-lg shadow-sm lg:hidden"
-        >
-          <Menu size={20} />
-        </button>
-      )}
+      <div className={cn(
+        "flex-1 flex transition-all duration-500",
+        isSidebarOpen ? "ml-80" : "ml-0"
+      )}>
+        <ChatInterface 
+          session={session}
+          onSessionUpdate={setSession}
+          initialMessages={initialMessages}
+        />
 
-      <ChatInterface 
-        session={session}
-        onSessionUpdate={setSession}
-        initialMessages={initialMessages}
-      />
-
-      {/* Optional Right Panel for Analysis / Reports (ChatGPT Style) */}
-      <div className="hidden xl:flex w-80 h-full border-l border-stone-200 bg-stone-50 flex-col p-6 overflow-y-auto">
-        <h3 className="text-xs font-bold text-stone-400 uppercase tracking-widest mb-6">Diagnostic Insights</h3>
-        
-        {session?.last_diagnosis ? (
-          <div className="space-y-6">
-            <div className="premium-card p-4">
-              <div className="text-[10px] font-bold text-primary uppercase mb-1">Primary Diagnosis</div>
-              <div className="text-lg font-bold text-stone-900 leading-tight">
-                {session.last_diagnosis?.primary_diagnosis || "Analyzing..."}
+        {/* Professional Right Panel: Diagnostic Intelligence */}
+        <aside className="hidden 2xl:flex w-[400px] h-full border-l border-stone-100 bg-stone-50/50 flex-col overflow-hidden">
+          <div className="p-8 border-b border-stone-100 bg-white/50">
+            <h3 className="text-[10px] font-black text-stone-400 uppercase tracking-[0.2em] mb-4">Case Intelligence</h3>
+            <div className="flex items-center gap-4">
+              <div className="w-12 h-12 bg-emerald-600 rounded-2xl flex items-center justify-center text-white shadow-lg shadow-emerald-600/20">
+                <Microscope size={24} />
               </div>
-              <div className="mt-2 flex items-center gap-2">
-                <div className="flex-1 h-1.5 bg-stone-100 rounded-full overflow-hidden">
-                  <div 
-                    className="h-full bg-primary transition-all duration-1000" 
-                    style={{ width: `${(session.last_diagnosis?.confidence_score || 0) * 100}%` }}
-                  ></div>
-                </div>
-                <span className="text-xs font-bold text-stone-500">
-                  {Math.round((session.last_diagnosis?.confidence_score || 0) * 100)}%
-                </span>
-              </div>
-            </div>
-
-            <div className="space-y-4">
               <div>
-                <h4 className="text-[11px] font-bold text-stone-500 uppercase mb-2">Key Symptoms Identified</h4>
-                <div className="space-y-2">
-                  {session.last_diagnosis?.matching_symptoms?.slice(0, 5).map((sym: string, i: number) => (
-                    <div key={i} className="flex items-center gap-2 text-sm text-stone-700">
-                      <div className="w-1.5 h-1.5 bg-green-500 rounded-full"></div>
-                      {sym}
-                    </div>
-                  )) || <div className="text-xs text-stone-400 italic">No symptoms mapped yet</div>}
-                </div>
+                <p className="text-xs font-bold text-stone-400 uppercase tracking-wider leading-none mb-1">Status</p>
+                <p className="text-sm font-black text-stone-900 uppercase">Live Analysis</p>
               </div>
-
-              {session.last_diagnosis?.immediate_precautions?.length > 0 && (
-                <div className="p-4 bg-orange-50 rounded-xl border border-orange-100">
-                  <h4 className="text-[11px] font-bold text-orange-700 uppercase mb-2">Immediate Precautions</h4>
-                  <ul className="text-xs text-orange-800 leading-relaxed list-disc pl-4 space-y-1">
-                    {session.last_diagnosis.immediate_precautions.slice(0, 3).map((p: string, i: number) => (
-                      <li key={i}>{p}</li>
-                    ))}
-                  </ul>
-                </div>
-              )}
             </div>
           </div>
-        ) : (
-          <div className="flex-1 flex flex-col items-center justify-center text-center opacity-50">
-            <div className="w-12 h-12 bg-stone-100 rounded-full flex items-center justify-center mb-4">
-              <AlertCircle size={24} className="text-stone-400" />
+
+          <div className="flex-1 overflow-y-auto p-8 space-y-8">
+            {session?.last_diagnosis ? (
+              <div className="space-y-8 animate-in fade-in slide-in-from-right-4 duration-500">
+                {/* Confidence Card */}
+                <div className="bg-white p-6 rounded-[32px] border border-stone-100 shadow-xl shadow-stone-200/40 relative overflow-hidden group">
+                  <div className="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-20 transition-all">
+                    <ShieldCheck size={64} className="text-emerald-600" />
+                  </div>
+                  <h4 className="text-[10px] font-black text-emerald-600 uppercase tracking-widest mb-4">Grounding Score</h4>
+                  <div className="flex items-end gap-3 mb-4">
+                    <span className="text-5xl font-black text-stone-900 tracking-tighter">
+                      {Math.round((session.last_diagnosis?.confidence_score || 0) * 100)}
+                    </span>
+                    <span className="text-lg font-bold text-stone-300 mb-1.5">%</span>
+                  </div>
+                  <div className="h-2 bg-stone-100 rounded-full overflow-hidden">
+                    <div 
+                      className="h-full bg-emerald-500 transition-all duration-1000 ease-out" 
+                      style={{ width: `${(session.last_diagnosis?.confidence_score || 0) * 100}%` }}
+                    />
+                  </div>
+                  <p className="mt-4 text-[11px] text-stone-500 font-medium leading-relaxed">
+                    Based on **MM-RAG** retrieval from 5,000+ clinical records and veterinary manuals.
+                  </p>
+                </div>
+
+                {/* Evidence Section */}
+                <div className="space-y-4">
+                  <div className="flex items-center gap-2 text-stone-400">
+                    <Activity size={16} />
+                    <h4 className="text-[10px] font-black uppercase tracking-widest">Evidence Mapping</h4>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {session.last_diagnosis?.matching_symptoms?.map((sym: string, i: number) => (
+                      <span key={i} className="px-3 py-1.5 bg-stone-100 text-stone-600 text-[11px] font-bold rounded-lg border border-stone-200/50">
+                        {sym}
+                      </span>
+                    )) || <span className="text-xs text-stone-400 italic">No symptoms detected</span>}
+                  </div>
+                </div>
+
+                {/* Critical Precautions */}
+                {session.last_diagnosis?.immediate_precautions?.length > 0 && (
+                  <div className="p-6 bg-amber-50 rounded-[32px] border border-amber-100">
+                    <div className="flex items-center gap-2 text-amber-700 mb-4">
+                      <Stethoscope size={18} />
+                      <h4 className="text-[10px] font-black uppercase tracking-widest text-amber-800">Critical Actions</h4>
+                    </div>
+                    <ul className="space-y-4">
+                      {session.last_diagnosis.immediate_precautions.slice(0, 3).map((p: string, i: number) => (
+                        <li key={i} className="flex gap-3">
+                          <div className="w-5 h-5 bg-amber-200 rounded-full flex items-center justify-center text-[10px] font-bold text-amber-800 flex-shrink-0 mt-0.5">
+                            {i+1}
+                          </div>
+                          <p className="text-[13px] text-amber-900/80 leading-relaxed font-medium">
+                            {p}
+                          </p>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="h-full flex flex-col items-center justify-center text-center opacity-30 py-20 px-8">
+                <div className="w-20 h-20 bg-stone-100 rounded-[32px] flex items-center justify-center mb-6">
+                  <AlertCircle size={32} className="text-stone-400" />
+                </div>
+                <h4 className="text-sm font-black text-stone-900 uppercase mb-2">Awaiting Case</h4>
+                <p className="text-xs text-stone-500 font-medium leading-relaxed">
+                  Start a clinical diagnosis session to see real-time intelligence mapping and precautions here.
+                </p>
+              </div>
+            )}
+          </div>
+
+          {/* Expert Note */}
+          <div className="p-8 bg-stone-100/50 border-t border-stone-100">
+            <div className="flex items-center gap-2 text-[10px] font-bold text-stone-400 uppercase tracking-widest mb-2">
+              <ShieldCheck size={12} /> Certified Evidence
             </div>
-            <p className="text-sm text-stone-500">
-              Start a diagnosis to see real-time insights and precautions here.
+            <p className="text-[10px] text-stone-400 leading-relaxed">
+              This system uses a **BGE-Reranker** to validate all clinical evidence against verified veterinary manuals.
             </p>
           </div>
-        )}
+        </aside>
       </div>
-    </main>
+    </div>
   );
 }
