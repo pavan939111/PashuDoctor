@@ -269,4 +269,4 @@ Developed for the **Google DeepMind Advanced Agentic Coding Hackathon**.
 Special thanks to the veterinary communities providing open-source datasets for livestock health.
 
 🔗 **GitHub**: https://github.com/pavan939111/PashuDoctor
-🔗 **LinkedIn**: [View My Project Post](https://www.linkedin.com/in/your-profile)
+🔗 **LinkedIn**: [Pavan Kumar Kunukuntla](https://www.linkedin.com/in/pavan-kumar-kunukuntla/)
