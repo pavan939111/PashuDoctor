@@ -133,10 +133,24 @@ graph TD
 
 - **Multi-Modal Diagnostics**: Unified analysis of visual symptoms and textual descriptions.
 - **AI Safety Guardrails**: Robust rejection of non-livestock queries and harmful advice.
-- **10+ Indian Languages**: Real-time translation with Voice-to-Voice (STT/TTS) accessibility.
+- **10+ Indian Languages**: Real-time translation with Voice-to-Voice (STT/TTS) support for **Hindi, Telugu, Tamil, Kannada, Malayalam, Marathi, Bengali, Punjabi, Gujarati, and English**.
 - **Herd Biosecurity**: Automatic detection and isolation alerts for contagious diseases (FMD, LSD).
 - **National Integration**: One-click connection to the **1962** National Animal Helpline.
 - **Precision Retrieval**: Hybrid 512-dimension vector search with cross-encoder reranking.
+
+---
+
+## 📡 API Reference
+
+PashuDoctor exposes a robust REST API for diagnostic and management operations.
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/analyze/image` | `POST` | Core multimodal analysis (Image + Symptoms). |
+| `/chat` | `POST` | Multi-turn conversational AI for follow-up questions. |
+| `/history/user/{uid}` | `GET` | Retrieves case history for a specific farmer. |
+| `/alerts/regional` | `GET` | Fetches active contagious disease alerts for a region. |
+| `/health` | `GET` | System health check (API, DB, and Chroma status). |
 
 ---
 
@@ -204,6 +218,39 @@ To populate the vector database with veterinary knowledge:
 2. **Build KB**: `python scripts/build_kb.py` (Chunks and indexes veterinary manuals).
 3. **Generate Embeddings**: `python scripts/embed.py` (Runs CLIP ViT-B/32 over the dataset).
 4. **Verify**: `python scripts/verify_embeddings.py` (Ensures dimension consistency).
+
+---
+
+## 🧪 Testing & Evaluation
+
+### 1. Unit & Integration Tests
+```bash
+# Run all backend tests
+pytest backend/tests/ -v
+
+# Run specific integration tests
+pytest backend/tests/test_integration.py -v
+```
+
+### 2. Performance Evaluation
+We use a specialized evaluation script to measure retrieval accuracy and diagnostic confidence:
+```bash
+# Calculates Top-1 and Top-3 Accuracy metrics
+$env:PYTHONPATH="backend"; python scripts/evaluate.py
+```
+
+---
+
+## 🛠️ Troubleshooting FAQ
+
+**Q: ChromaDB returns a "Dimension Mismatch" error.**
+- **Fix**: All collections are now standardized to **512 dimensions**. Delete the `data/chroma_db` folder and run `python scripts/embed.py` to re-initialize.
+
+**Q: Port 8000 (Backend) or 3000 (Frontend) is already in use.**
+- **Fix**: Use `netstat -ano | findstr :8000` to find the Process ID and `taskkill /F /PID <PID>` to clear it.
+
+**Q: CLIP model is taking too long to load.**
+- **Fix**: The first run downloads the weights (~600MB). Ensure you have a stable internet connection. Subsequent runs will be near-instant.
 
 ---
 
