@@ -118,52 +118,70 @@ PashuDoctor implements a state-of-the-art **Multi-Modal Retrieval-Augmented Gene
 
 ---
 
-## 🛠️ Technical Implementation
+## 🛡️ AI Safety & Guardrails
 
-### 1. Retrieval Logic
-We use a weighted fusion for hybrid search:
-`final_score = (0.5 * norm_dense_score) + (0.5 * norm_sparse_score)`
-This ensures that visual evidence (Dense) and clinical keywords (Sparse) have equal weight in the final ranking.
+PashuDoctor is built with a multi-layered safety architecture to ensure it remains a specialized veterinary tool and never provides dangerous medical advice.
 
-### 2. Confidence Scoring
-Diagnostics are gated by a multi-factor confidence engine:
-- **High (>0.85)**: Immediate suggestion with formatted clinical report.
-- **Medium (0.60 - 0.85)**: Asks targeted follow-up questions to clarify ambiguity.
-- **Low (<0.60)**: Refers to the manual diagnostic checklist or 1962 helpline.
+### 1. Human Query Detector (Medical Safety)
+- **Problem**: Users often ask AI diagnostic tools about human health issues.
+- **Solution**: A semantic filter that compares user queries against a "Human Health" embedding cluster. If similarity is too high, the system rejects the query and redirects the user to a human doctor.
+
+### 2. Emergency Fast-Path (Sub-10ms)
+- **Logic**: Keywords like "bleeding", "collapsed", or "choking" in 10 languages trigger an immediate emergency response.
+- **Benefit**: Bypasses the RAG and LLM pipeline to provide instant 1962 helpline guidance when every second counts.
+
+### 3. Input & Output Validation
+- **Input Sanitizer**: Filters for PII, offensive language, and prompt injection attempts.
+- **Structured Output Validator**: Ensures the LLM response follows a strict JSON clinical schema. If the LLM "hallucinates" a dosage not found in the retrieved context, the system flags the response for human review.
+
+### 4. Confidence Gating
+- **Tier 1 (>0.85)**: Full Clinical Suggestion.
+- **Tier 2 (0.60-0.85)**: Clarification Mode (Asks follow-up questions).
+- **Tier 3 (<0.60)**: Reference Mode (Redirects to nearest vet/helpline).
 
 ---
 
 ## ⚙️ Setup & Installation
 
-### Prerequisites
-- Python 3.10+
-- Node.js 18+
-- Gemini API Key
+### 1. Environment Configuration
+Create a `.env` file in the root directory:
+```env
+# AI API Keys
+GEMINI_API_KEY=your_key_here
+GEMINI_API_KEY_1=rotation_key_1
 
-### Backend Setup
-```bash
-cd backend
-pip install -r requirements.txt
-# Initialize Database
-python seed_db.py
-# Start Server
-python -m uvicorn app.main:app --reload --port 8000
+# Database Paths
+CHROMA_PATH=./data/chroma_db
+SQLITE_DB_PATH=./data/pashudoctor.db
+
+# Retrieval Settings
+DENSE_WEIGHT=0.5
+BM25_WEIGHT=0.5
+CONFIDENCE_THRESHOLD=0.75
 ```
 
-### Frontend Setup
+### 2. Backend Installation
+```bash
+cd backend
+python -m venv venv
+source venv/bin/activate  # Windows: .\venv\Scripts\activate
+pip install -r requirements.txt
+python seed_db.py         # Initializes local SQLite storage
+```
+
+### 3. Frontend Installation (Next.js 15)
 ```bash
 cd frontend_next
 npm install
 npm run dev
 ```
 
-### Data Pipeline (Initial Setup)
-If you are setting up the vector store for the first time:
-```bash
-python scripts/build_manifest.py  # Map images to disease tags
-python scripts/build_kb.py        # Index veterinary manuals
-python scripts/embed.py           # Generate 512d CLIP embeddings
-```
+### 4. The Data Pipeline (Knowledge Base Building)
+To populate the vector database with veterinary knowledge:
+1. **Build Manifest**: `python scripts/build_manifest.py` (Maps images to disease labels).
+2. **Build KB**: `python scripts/build_kb.py` (Chunks and indexes veterinary manuals).
+3. **Generate Embeddings**: `python scripts/embed.py` (Runs CLIP ViT-B/32 over the dataset).
+4. **Verify**: `python scripts/verify_embeddings.py` (Ensures dimension consistency).
 
 ---
 
