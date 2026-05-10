@@ -85,6 +85,28 @@ pashudoctor/
 
 ---
 
+## 🧠 Advanced MM-RAG Architecture
+
+PashuDoctor implements a state-of-the-art **Multi-Modal Retrieval-Augmented Generation** pipeline that fuses visual and textual evidence for clinical-grade diagnostics.
+
+### 1. The Retrieval Pipeline (The "Intelligence" Layer)
+- **Visual Encoder**: `CLIP ViT-B/32` (Standardized to 512-dimension vectors).
+- **Text Encoder**: `CLIP ViT-B/32` (Unified embedding space for text/image alignment).
+- **Dense Vector Store**: **ChromaDB** (Stores ~5,000 disease-specific image embeddings).
+- **Sparse Search Index**: **Rank-BM25** (Handles exact symptom keyword matching).
+- **Hybrid Fusion**: Reciprocal Rank Fusion (RRF) with balanced 0.5/0.5 weights.
+
+### 2. The Refinement Layer (The "Precision" Layer)
+- **Cross-Encoder Reranker**: `BAAI/bge-reranker-base`
+- **Logic**: Re-evaluates the top 20 candidates from the hybrid search to select the most medically relevant knowledge chunks. This step reduces hallucinations by ensuring the LLM only sees high-relevance clinical data.
+
+### 3. The Synthesis Layer (The "Generation" Layer)
+- **Primary Generator**: `Google Gemini 1.5 Flash`
+- **Role**: Synthesizes the retrieved clinical evidence into a formatted report, including diagnosis, precautions, and emergency triage.
+- **Guardrails**: Integrated medical grounding checks to ensure output remains within veterinary safety bounds.
+
+---
+
 ## 🚀 Key Features
 
 - **Multi-Modal Diagnostics**: Unified analysis of visual symptoms and textual descriptions.
