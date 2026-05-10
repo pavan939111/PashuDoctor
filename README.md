@@ -85,25 +85,47 @@ pashudoctor/
 
 ---
 
-## 🧠 Advanced MM-RAG Architecture
+## 🧠 The Core Innovation: Advanced MM-RAG Architecture
 
-PashuDoctor implements a state-of-the-art **Multi-Modal Retrieval-Augmented Generation** pipeline that fuses visual and textual evidence for clinical-grade diagnostics.
+PashuDoctor’s primary technical differentiator is its **Multi-Modal Retrieval-Augmented Generation (MM-RAG)** pipeline. Unlike traditional RAG systems that only process text, PashuDoctor fuses visual and textual evidence in a unified 512-dimension vector space.
 
-### 1. The Retrieval Pipeline (The "Intelligence" Layer)
-- **Visual Encoder**: `CLIP ViT-B/32` (Standardized to 512-dimension vectors).
-- **Text Encoder**: `CLIP ViT-B/32` (Unified embedding space for text/image alignment).
-- **Dense Vector Store**: **ChromaDB** (Stores ~5,000 disease-specific image embeddings).
-- **Sparse Search Index**: **Rank-BM25** (Handles exact symptom keyword matching).
-- **Hybrid Fusion**: Reciprocal Rank Fusion (RRF) with balanced 0.5/0.5 weights.
+### 🔄 MM-RAG Technical Flow
+```mermaid
+graph TD
+    subgraph "1. Multi-Modal Ingestion"
+        Img[Animal Photo] --> CLIP_V[CLIP ViT-B/32 Vision Encoder]
+        Txt[Symptom Text] --> CLIP_T[CLIP ViT-B/32 Text Encoder]
+    end
 
-### 2. The Refinement Layer (The "Precision" Layer)
-- **Cross-Encoder Reranker**: `BAAI/bge-reranker-base`
-- **Logic**: Re-evaluates the top 20 candidates from the hybrid search to select the most medically relevant knowledge chunks. This step reduces hallucinations by ensuring the LLM only sees high-relevance clinical data.
+    subgraph "2. Unified Vector Space (512d)"
+        CLIP_V --> Fusion[Weighted Feature Fusion]
+        CLIP_T --> Fusion
+    end
 
-### 3. The Synthesis Layer (The "Generation" Layer)
-- **Primary Generator**: `Google Gemini 1.5 Flash`
-- **Role**: Synthesizes the retrieved clinical evidence into a formatted report, including diagnosis, precautions, and emergency triage.
-- **Guardrails**: Integrated medical grounding checks to ensure output remains within veterinary safety bounds.
+    subgraph "3. Hybrid Retrieval Engine"
+        Fusion --> Dense[ChromaDB Dense Search]
+        Fusion --> Sparse[Rank-BM25 Sparse Search]
+        Dense & Sparse --> RRF[Hybrid Score Fusion]
+    end
+
+    subgraph "4. Context Refinement"
+        RRF --> Rerank[BGE Cross-Encoder Reranker]
+        Rerank --> Context[Top-K Clinical Context]
+    end
+
+    subgraph "5. Augmented Synthesis"
+        Context --> Gemini[Gemini 1.5 Flash]
+        Txt --> Gemini
+        Img --> Gemini
+        Gemini --> Diagnosis[Validated Diagnostic Report]
+    end
+```
+
+### 🧩 Key AI Components
+- **Unified Embedding Space**: Standardized `CLIP ViT-B/32` ensuring total alignment between image features and textual symptom descriptions.
+- **Hybrid Retrieval**: Combines semantic similarity (**ChromaDB**) with exact clinical keyword matching (**BM25**).
+- **Cross-Encoder Reranking**: Utilizes `bge-reranker-base` to eliminate "retrieval noise" and ensure the LLM receives only the most grounded veterinary knowledge.
+- **Context-Aware Synthesis**: `Gemini 1.5 Flash` performs final reasoning, grounded by the retrieved clinical manuals and the farmer's specific case evidence.
 
 ---
 
